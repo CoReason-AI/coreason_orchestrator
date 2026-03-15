@@ -47,7 +47,7 @@ def test_resolve_current_node_empty_ledger() -> None:
     ledger = EpistemicLedgerState(history=[])
 
     current_node = resolve_current_node(workflow, ledger)
-    assert current_node is node_a
+    assert current_node == [node_a]
 
 
 def test_resolve_current_node_with_history() -> None:
@@ -71,7 +71,7 @@ def test_resolve_current_node_with_history() -> None:
     ledger = EpistemicLedgerState(history=[event])
 
     current_node = resolve_current_node(workflow, ledger)
-    assert current_node is node_b
+    assert current_node == [node_b]
 
 
 def test_resolve_current_node_non_dag() -> None:
@@ -97,14 +97,14 @@ def test_resolve_current_node_non_dag() -> None:
         topology=topology,
     )
     ledger = EpistemicLedgerState(history=[])
-    # Returns None as it doesn't have nodes field handled correctly yet
-    assert resolve_current_node(workflow, ledger) is None
+    # Returns empty list as it doesn't have nodes field handled correctly yet
+    assert resolve_current_node(workflow, ledger) == []
 
 
 def test_resolve_current_node_dag_no_nodes() -> None:
     workflow = get_mock_workflow({}, [])
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) is None
+    assert resolve_current_node(workflow, ledger) == []
 
 
 def test_resolve_current_node_dag_cyclic() -> None:
@@ -114,8 +114,8 @@ def test_resolve_current_node_dag_cyclic() -> None:
     edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:b", "did:coreason:node:a")]
     workflow = get_mock_workflow(nodes, edges)
     ledger = EpistemicLedgerState(history=[])
-    # Cyclic picks first deterministically
-    assert resolve_current_node(workflow, ledger) is node_a
+    # Cyclic picks first deterministically based on sorting keys
+    assert resolve_current_node(workflow, ledger) == [node_a]
 
 
 def test_resolve_current_node_all_completed() -> None:
@@ -132,7 +132,7 @@ def test_resolve_current_node_all_completed() -> None:
         triggering_invocation_id="req1",
     )
     ledger = EpistemicLedgerState(history=[event])
-    assert resolve_current_node(workflow, ledger) is None
+    assert resolve_current_node(workflow, ledger) == []
 
 
 def test_resolve_current_node_not_agent_profile() -> None:
@@ -149,7 +149,7 @@ def test_resolve_current_node_not_agent_profile() -> None:
     edges: list[tuple[Any, Any]] = []
     workflow = get_mock_workflow(nodes, edges)
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) is None
+    assert resolve_current_node(workflow, ledger) == []
 
 
 def test_resolve_current_node_cyclic_not_agent_profile() -> None:
@@ -166,7 +166,7 @@ def test_resolve_current_node_cyclic_not_agent_profile() -> None:
     edges = [("did:coreason:node:a", "did:coreason:node:a")]
     workflow = get_mock_workflow(nodes, edges)
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) is None
+    assert resolve_current_node(workflow, ledger) == []
 
 
 def test_resolve_current_node_non_dag_with_nodes() -> None:
@@ -189,7 +189,7 @@ def test_resolve_current_node_non_dag_with_nodes() -> None:
         topology=topology,
     )
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) is node_a
+    assert resolve_current_node(workflow, ledger) == [node_a]
 
 
 def test_resolve_current_node_non_dag_not_agent() -> None:
@@ -218,4 +218,29 @@ def test_resolve_current_node_non_dag_not_agent() -> None:
         topology=topology,
     )
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) is None
+    assert resolve_current_node(workflow, ledger) == []
+
+
+def test_resolve_current_node_multiple_concurrent_roots() -> None:
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
+
+    nodes = {
+        "did:coreason:node:a": node_a,
+        "did:coreason:node:b": node_b,
+        "did:coreason:node:c": node_c,
+    }
+
+    # A and B have no incoming edges. C depends on A and B.
+    edges = [
+        ("did:coreason:node:a", "did:coreason:node:c"),
+        ("did:coreason:node:b", "did:coreason:node:c"),
+    ]
+
+    workflow = get_mock_workflow(nodes, edges)
+    ledger = EpistemicLedgerState(history=[])
+
+    # Initial state should resolve both roots
+    current_nodes = resolve_current_node(workflow, ledger)
+    assert current_nodes == [node_a, node_b]

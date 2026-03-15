@@ -47,6 +47,7 @@ class CoreOrchestrator:
         self.ledger = ledger
         self.inference_engine = inference_engine
         self.actuator_engine = actuator_engine
+        self._ledger_lock = asyncio.Lock()
 
     async def delegate_to_cognitive_plane(self, node: AgentNodeProfile) -> None:
         """
@@ -62,11 +63,10 @@ class CoreOrchestrator:
         # 1. Dispatch the current node profile and strictly read-only ledger
         payload, burn_receipt, _ = await self.inference_engine.generate_intent(node, self.ledger)
 
-        # 2. Append the generated intent/event to the ledger (synthesizes new state)
-        self.ledger = append_event(self.ledger, payload)
-
-        # 3. Append the thermodynamic burn receipt to the ledger (synthesizes new state)
-        self.ledger = append_event(self.ledger, burn_receipt)
+        # 2. Append the generated intent/event and thermodynamic burn receipt to the ledger securely
+        async with self._ledger_lock:
+            new_ledger = append_event(self.ledger, payload)
+            self.ledger = append_event(new_ledger, burn_receipt)
 
     async def delegate_to_kinetic_plane(self, intent: ToolInvocationEvent, manifest: ToolManifest) -> None:
         """
@@ -106,7 +106,8 @@ class CoreOrchestrator:
         )
 
         # 4. Append the ObservationEvent to the immutable ledger
-        self.ledger = append_event(self.ledger, observation)
+        async with self._ledger_lock:
+            self.ledger = append_event(self.ledger, observation)
 
     def handle_preemption(self, interrupt_event: BargeInInterruptEvent, active_invocation_id: str) -> None:
         """
@@ -166,31 +167,48 @@ class CoreOrchestrator:
             True if work was performed, False if the graph is fully resolved or halted.
         """
         # 1. Resolve current topological cursor
-        current_node = resolve_current_node(self.workflow, self.ledger)
-        if not current_node:
+        frontier_nodes = resolve_current_node(self.workflow, self.ledger)
+        if not frontier_nodes:
             return False
 
-        # 2. Evaluate if the kinetic plane needs to resolve a pending tool
-        if self.ledger.history:
-            latest_event = self.ledger.history[-1]
-            if isinstance(latest_event, ToolInvocationEvent):
-                # We need to dispatch the kinetic actuator.
-                from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
+        # 2. Evaluate if the kinetic plane needs to resolve pending tools
+        # A tool is pending if it is a ToolInvocationEvent that does not have a corresponding
+        # ObservationEvent with its triggering_invocation_id
+        resolved_invocation_ids = {
+            event.triggering_invocation_id
+            for event in self.ledger.history
+            if isinstance(event, ObservationEvent) and event.triggering_invocation_id
+        }
 
-                # Natively synthesize a ToolManifest strictly to satisfy the protocol boundary
-                # In a real environment, the ToolManifest is mapped from the node's capabilities.
-                manifest = ToolManifest(
-                    tool_name=latest_event.tool_name,
-                    description="Dynamically resolved tool",
-                    input_schema={"type": "object", "properties": {}, "required": []},
-                    side_effects=SideEffectProfile(is_idempotent=False, mutates_state=True),
-                    permissions=PermissionBoundaryPolicy(network_access=True, file_system_mutation_forbidden=False),
-                )
-                await self.delegate_to_kinetic_plane(latest_event, manifest)
-                return True
+        pending_tools: list[ToolInvocationEvent] = [
+            event
+            for event in self.ledger.history
+            if isinstance(event, ToolInvocationEvent) and event.event_id not in resolved_invocation_ids
+        ]
 
-        # 3. If no pending kinetic task, delegate to the Cognitive Plane
-        await self.delegate_to_cognitive_plane(current_node)
+        if pending_tools:
+            # We need to dispatch the kinetic actuator for all pending tools.
+            from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
+
+            async with asyncio.TaskGroup() as tg:
+                for intent in pending_tools:
+                    # Natively synthesize a ToolManifest strictly to satisfy the protocol boundary
+                    # In a real environment, the ToolManifest is mapped from the node's capabilities.
+                    manifest = ToolManifest(
+                        tool_name=intent.tool_name,
+                        description="Dynamically resolved tool",
+                        input_schema={"type": "object", "properties": {}, "required": []},
+                        side_effects=SideEffectProfile(is_idempotent=False, mutates_state=True),
+                        permissions=PermissionBoundaryPolicy(network_access=True, file_system_mutation_forbidden=False),
+                    )
+                    tg.create_task(self.delegate_to_kinetic_plane(intent, manifest))
+            return True
+
+        # 3. If no pending kinetic task, delegate to the Cognitive Plane concurrently for all nodes in the frontier
+        async with asyncio.TaskGroup() as tg:
+            for node in frontier_nodes:
+                tg.create_task(self.delegate_to_cognitive_plane(node))
+
         return True
 
     async def run_event_loop(self) -> None:
