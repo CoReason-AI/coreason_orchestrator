@@ -66,17 +66,40 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
             return [node]
         return []
 
-    # Track execution history
+    # Track execution history and routing decisions
     # A node is considered completed if there is an EpistemicFlowStateReceipt
     # or ObservationEvent indicating terminal state
     # Actually, the FRD mentions EpistemicFlowStateReceipt is terminal completion.
     completed_nodes: set[str] = set()
+    active_subgraphs_set: set[str] = set()
+    has_routing_manifest = False
+
     for event in ledger.history:
-        if isinstance(event, ObservationEvent) and event.source_node_id:
-            # We might consider ObservationEvent as a state event that implies execution happened on the node
-            completed_nodes.add(event.source_node_id)
-        # Note: EpistemicFlowStateReceipt does not hold a source_node_id directly in the current ontology version,
-        # but ObservationEvent strictly binds source_node_id.
+        if isinstance(event, ObservationEvent):
+            if event.source_node_id:
+                # We might consider ObservationEvent as a state event that implies execution happened on the node
+                completed_nodes.add(event.source_node_id)
+
+            # FR-2.2 Conditional Edges: Extract embedded DynamicRoutingManifest from the ObservationEvent payload.
+            # We attempt to unpack it if the payload structure matches a DynamicRoutingManifest dictionary.
+            # Specifically checking for the existence of its mandated tracking keys.
+            if isinstance(event.payload, dict) and (
+                "active_subgraphs" in event.payload or "bypassed_steps" in event.payload
+            ):
+                has_routing_manifest = True
+                # bypassed_steps is a list of BypassReceipt dicts
+                bypassed_steps = event.payload.get("bypassed_steps", [])
+                if isinstance(bypassed_steps, list):
+                    for step in bypassed_steps:
+                        if isinstance(step, dict) and "bypassed_node_id" in step:
+                            completed_nodes.add(step["bypassed_node_id"])
+
+                # active_subgraphs is a dict[str, list[NodeIdentifierState]]
+                active_subgraphs = event.payload.get("active_subgraphs", {})
+                if isinstance(active_subgraphs, dict):
+                    for subgraph_nodes in active_subgraphs.values():
+                        if isinstance(subgraph_nodes, list):
+                            active_subgraphs_set.update(subgraph_nodes)
 
     # Build adjacency list (forward edges) and in-degree tracking (predecessors)
     adj: dict[str, list[str]] = {str(n): [] for n in nodes}
@@ -91,6 +114,12 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
     # A node is in the frontier if it is NOT completed, but ALL its predecessors ARE completed.
     for node_id in sorted(nodes.keys()):
         if node_id in completed_nodes:
+            continue
+
+        # FR-2.2 Conditional Edges: Delegate conditional routing to DynamicRoutingManifest.
+        # If any routing manifests exist and define active_subgraphs,
+        # only nodes explicitly listed in active_subgraphs should be explored.
+        if has_routing_manifest and active_subgraphs_set and node_id not in active_subgraphs_set:
             continue
 
         # Check if all predecessors are completed

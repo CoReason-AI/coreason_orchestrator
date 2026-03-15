@@ -244,3 +244,137 @@ def test_resolve_current_node_multiple_concurrent_roots() -> None:
     # Initial state should resolve both roots
     current_nodes = resolve_current_node(workflow, ledger)
     assert current_nodes == [node_a, node_b]
+
+
+def test_resolve_current_node_bypassed_steps() -> None:
+    """Verify accumulation of bypassed_steps preventing execution of bypassed nodes."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
+
+    nodes = {
+        "did:coreason:node:a": node_a,
+        "did:coreason:node:b": node_b,
+        "did:coreason:node:c": node_c,
+    }
+    # A -> B -> C
+    edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:b", "did:coreason:node:c")]
+    workflow = get_mock_workflow(nodes, edges)
+
+    # A completes, and outputs an ObservationEvent containing a DynamicRoutingManifest dict that bypasses B
+    obs_a = ObservationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="observation",
+        payload={
+            "result": "ok",
+            "active_subgraphs": {},
+            "bypassed_steps": [
+                {
+                    "artifact_event_id": "e1",
+                    "bypassed_node_id": "did:coreason:node:b",
+                    "justification": "modality_mismatch",
+                    "cryptographic_null_hash": "a" * 64,
+                }
+            ],
+        },
+        source_node_id="did:coreason:node:a",
+    )
+    ledger = EpistemicLedgerState(history=[obs_a])
+    frontier = resolve_current_node(workflow, ledger)
+
+    # B is bypassed, so it is considered completed. Predecessors of C are B (completed), so C should be the frontier.
+    assert len(frontier) == 1
+    assert frontier[0] == node_c
+
+
+def test_resolve_current_node_active_subgraphs() -> None:
+    """Verify frontier filtering using active_subgraphs."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
+
+    nodes = {
+        "did:coreason:node:a": node_a,
+        "did:coreason:node:b": node_b,
+        "did:coreason:node:c": node_c,
+    }
+    # A -> B, A -> C
+    edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:a", "did:coreason:node:c")]
+    workflow = get_mock_workflow(nodes, edges)
+
+    # A completes, and its ObservationEvent payload specifies only C is active
+    obs_a = ObservationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="observation",
+        payload={"result": "ok", "active_subgraphs": {"text": ["did:coreason:node:c"]}, "bypassed_steps": []},
+        source_node_id="did:coreason:node:a",
+    )
+    ledger = EpistemicLedgerState(history=[obs_a])
+    frontier = resolve_current_node(workflow, ledger)
+
+    # Normally B and C would be active, but only C is in active_subgraphs.
+    assert len(frontier) == 1
+    assert frontier[0] == node_c
+
+
+def test_resolve_current_node_multiple_routing_manifests() -> None:
+    """Verify handling of multiple DynamicRoutingManifest payloads in Observations."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
+    node_d = AgentNodeProfile(description="D", architectural_intent=".", justification=".", type="agent")
+
+    nodes = {
+        "did:coreason:node:a": node_a,
+        "did:coreason:node:b": node_b,
+        "did:coreason:node:c": node_c,
+        "did:coreason:node:d": node_d,
+    }
+    # A -> B, A -> C, B -> D, C -> D
+    edges = [
+        ("did:coreason:node:a", "did:coreason:node:b"),
+        ("did:coreason:node:a", "did:coreason:node:c"),
+        ("did:coreason:node:b", "did:coreason:node:d"),
+        ("did:coreason:node:c", "did:coreason:node:d"),
+    ]
+    workflow = get_mock_workflow(nodes, edges)
+
+    obs_a = ObservationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="observation",
+        payload={
+            "result": "ok",
+            "active_subgraphs": {"text": ["did:coreason:node:b", "did:coreason:node:c"]},
+            "bypassed_steps": [],
+        },
+        source_node_id="did:coreason:node:a",
+    )
+    obs_b = ObservationEvent(
+        event_id="e2",
+        timestamp=3.0,
+        type="observation",
+        payload={
+            "result": "ok",
+            "active_subgraphs": {"text": ["did:coreason:node:b", "did:coreason:node:c", "did:coreason:node:d"]},
+            "bypassed_steps": [
+                {
+                    "artifact_event_id": "e2",
+                    "bypassed_node_id": "did:coreason:node:c",
+                    "justification": "modality_mismatch",
+                    "cryptographic_null_hash": "b" * 64,
+                }
+            ],
+        },
+        source_node_id="did:coreason:node:b",
+    )
+    ledger = EpistemicLedgerState(history=[obs_a, obs_b])
+
+    frontier = resolve_current_node(workflow, ledger)
+
+    # A is complete. B is complete. C is bypassed (so complete). D requires B and C complete, both are.
+    # So D should be in the frontier. D is in active_subgraphs.
+    assert len(frontier) == 1
+    assert frontier[0] == node_d
