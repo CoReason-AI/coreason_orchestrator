@@ -8,9 +8,9 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
-import importlib
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 def test_logger_directory_creation(tmp_path: Path) -> None:
@@ -53,43 +53,75 @@ def test_logger_coverage_import() -> None:
     import coreason_orchestrator.utils.logger  # noqa: F401
 
 
-def test_logger_coverage_import_when_dir_not_exists() -> None:
+def test_logger_coverage_import_when_dir_not_exists(tmp_path: Path) -> None:
     """Force execution of the `if not log_path.exists(): log_path.mkdir()` line directly on the real module."""
-    # Temporarily hide the logs directory
-    logs_dir = Path("logs")
-    hidden_dir = Path(".logs_hidden")
+    # The file has module-level execution, so mocking Path globally isn't taking effect
+    # correctly via reload. Instead, let's use the same string execution approach
+    # we use in test_logger_directory_creation but explicitly mock out `logger.add` and
+    # ensure we hit the `log_path.mkdir()` line by substituting the log path with
+    # a mocked Path object or simply a new temp path.
 
-    # The file logger holds a lock to `logs/app.log`, so we must close it first
-    # by removing all handlers from the global logger before attempting to rename the dir.
-    try:
-        from coreason_orchestrator.utils.logger import logger
+    import coreason_orchestrator.utils.logger as log_module
 
-        logger.remove()
-    except Exception:  # noqa: S110
-        pass
+    # Since we just want to execute the mkdir line, we can just replace 'logs' with a fake
+    # path string that doesn't exist and watch it get created to test that line.
+    logger_path = Path(log_module.__file__)
+    content = logger_path.read_text()
 
-    if logs_dir.exists():
-        logs_dir.rename(hidden_dir)
+    # Provide a path that definitely does not exist
+    test_logs_path = tmp_path / "coverage_test_logs"
+    test_logs_str = test_logs_path.as_posix()
+    content = content.replace('"logs"', f'"{test_logs_str}"')
+    content = content.replace('"logs/app.log"', f'"{test_logs_str}/app.log"')
 
-    try:
-        # Reloading the module should trigger directory creation since we renamed 'logs'
-        import coreason_orchestrator.utils.logger as log_module
+    # Mock logger to do nothing to avoid any weird file handle locks
+    mock_str = "from unittest.mock import MagicMock\nlogger = MagicMock()\n"
+    content = mock_str + content.replace("from loguru import logger", "")
 
-        importlib.reload(log_module)
-        assert Path("logs").exists()
-    finally:
-        try:
-            from coreason_orchestrator.utils.logger import logger
+    assert not test_logs_path.exists()
 
-            logger.remove()
-        except Exception:  # noqa: S110
-            pass
+    dummy_namespace: dict[str, Any] = {}
+    exec(content, dummy_namespace)  # noqa: S102
 
-        # Restore original state
-        if Path("logs").exists():
-            for f in Path("logs").glob("*"):
-                f.unlink()
-            Path("logs").rmdir()
+    # Verify that the directory was created via execution of that line
+    assert test_logs_path.exists()
+    assert test_logs_path.is_dir()
 
-        if hidden_dir.exists():
-            hidden_dir.rename(logs_dir)
+    # Import the actual module again to register it in coverage without the magic mock.
+    # We do this by ensuring the original directory does not exist for a brief moment.
+    # We do this in a safe cross-platform way.
+    import sys
+
+    if "coreason_orchestrator.utils.logger" in sys.modules:
+        del sys.modules["coreason_orchestrator.utils.logger"]
+
+    import sys
+
+    if "coreason_orchestrator.utils.logger" in sys.modules:
+        del sys.modules["coreason_orchestrator.utils.logger"]
+
+    # To pass coverage on `log_path.mkdir(parents=True, exist_ok=True)`, we must
+    # mock `Path` but doing so effectively during a reload requires patching the target
+    # module directly right before reload, but sometimes that gets reset.
+    # Instead, we will use a tempfile patch strategy in a separate test function
+    # to avoid state contamination.
+
+
+def test_logger_coverage_mkdir(tmp_path: Path, monkeypatch: Any) -> None:
+    """Force execution of the `if not log_path.exists(): log_path.mkdir()` line for coverage."""
+    import sys
+
+    test_logs_dir = tmp_path / "logs"
+
+    # We change the current working directory to the temporary path!
+    # Because `Path("logs")` is relative to cwd, changing cwd means it creates it in `tmp_path`.
+    monkeypatch.chdir(tmp_path)
+
+    # Ensure module is cleared
+    if "coreason_orchestrator.utils.logger" in sys.modules:
+        del sys.modules["coreason_orchestrator.utils.logger"]
+
+    with patch("loguru.logger.add"), patch("loguru.logger.remove"):
+        import coreason_orchestrator.utils.logger  # noqa: F401
+
+    assert test_logs_dir.exists()
