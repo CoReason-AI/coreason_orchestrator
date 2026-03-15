@@ -59,6 +59,7 @@ source = { editable = "." }
 dependencies = [
     { name = "coreason-manifest" },
     { name = "loguru" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -85,6 +86,7 @@ dev = [
 requires-dist = [
     { name = "coreason-manifest", specifier = ">=0.26.1" },
     { name = "loguru", specifier = ">=0.7.2" },
+    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [package.metadata.requires-dev]
