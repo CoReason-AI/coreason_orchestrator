@@ -463,9 +463,11 @@ async def test_run_event_loop_success() -> None:
     )
 
     # Empty nodes = terminal, so tick() returns False immediately
-    await orchestrator.run_event_loop()
+    final_ledger = await orchestrator.run_event_loop()
 
     inference_engine.generate_intent.assert_not_called()
+    assert isinstance(final_ledger, EpistemicLedgerState)
+    assert final_ledger is orchestrator.ledger
 
 
 @pytest.mark.asyncio
@@ -532,10 +534,12 @@ async def test_run_event_loop_preemption() -> None:
     orchestrator.interrupt_queue.put_nowait((barge_in_event, "active_tool_inv"))
 
     # When we run the event loop, it should process the interrupt, cancel the tick, and gracefully exit
-    await asyncio.wait_for(orchestrator.run_event_loop(), timeout=2.0)
+    final_ledger = await asyncio.wait_for(orchestrator.run_event_loop(), timeout=2.0)
 
     # Verify that preemption handled it correctly
     assert len(orchestrator.ledger.history) == 1
+    assert isinstance(final_ledger, EpistemicLedgerState)
+    assert final_ledger is orchestrator.ledger
     terminal_event = orchestrator.ledger.history[0]
     assert isinstance(terminal_event, BargeInInterruptEvent)
     assert terminal_event.target_event_id == "active_tool_inv"
