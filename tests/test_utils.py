@@ -8,8 +8,10 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
+import importlib
 from pathlib import Path
 
+import coreason_orchestrator.utils.logger as log_module
 from coreason_orchestrator.utils.logger import logger
 
 
@@ -20,6 +22,10 @@ def test_logger_initialization() -> None:
     # Check if logs directory creation is handled
     # Note: running this test might actually create the directory in the test environment
     # if it doesn't exist.
+
+    # Reloading the module makes sure the directory is created if it was deleted
+    # by another test (like test_logger.py)
+    importlib.reload(log_module)
 
     log_path = Path("logs")
     assert log_path.exists()
