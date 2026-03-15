@@ -8,12 +8,18 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
+import time
+
 from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     EpistemicLedgerState,
+    ObservationEvent,
+    ToolInvocationEvent,
+    ToolManifest,
     WorkflowManifest,
 )
 
+from coreason_orchestrator.hydration import compile_state_hydration
 from coreason_orchestrator.interfaces import ActuatorEngineProtocol, InferenceEngineProtocol
 from coreason_orchestrator.ledger import append_event
 
@@ -57,3 +63,42 @@ class CoreOrchestrator:
 
         # 3. Append the thermodynamic burn receipt to the ledger (synthesizes new state)
         self.ledger = append_event(self.ledger, burn_receipt)
+
+    async def delegate_to_kinetic_plane(self, intent: ToolInvocationEvent, manifest: ToolManifest) -> None:
+        """
+        Delegates the execution of a tool to the air-gapped Kinetic Plane.
+
+        To enforce absolute Zero-Trust, the Orchestrator passes a compiled StateHydrationManifest
+        and strictly awaits a raw JsonPrimitiveState payload. It natively synthesizes the
+        ObservationEvent and securely binds the triggering_invocation_id before appending.
+
+        Args:
+            intent: The validated ToolInvocationEvent from the Cognitive Plane.
+            manifest: The associated ToolManifest defining the capability.
+        """
+        # 1. Compile a lightweight hydration manifest to prevent massive IPC serialization
+        ledger_manifest = compile_state_hydration(
+            ledger=self.ledger,
+            coordinate=self.workflow.manifest_version,  # Using version as a safe fallback coordinate
+            context={},  # No ephemeral context by default
+            max_tokens=self.workflow.topology.max_fan_out * 1000,  # Arbitrary limit based on topology
+        )
+
+        # 2. Dispatch execution and strictly await the raw JSON payload
+        raw_payload = await self.actuator_engine.execute(intent, manifest, ledger_manifest)
+
+        # 3. Securely synthesize the ObservationEvent natively (Zero-Trust)
+        # We must explicitly cast raw_payload to dict[str, Any] as required by ObservationEvent payload
+        if not isinstance(raw_payload, dict):
+            raw_payload = {"result": raw_payload}
+
+        observation = ObservationEvent(
+            event_id="",  # The ledger append_event handles RFC 8785 hashing
+            timestamp=time.time(),
+            type="observation",
+            payload=raw_payload,
+            triggering_invocation_id=intent.event_id,
+        )
+
+        # 4. Append the ObservationEvent to the immutable ledger
+        self.ledger = append_event(self.ledger, observation)
