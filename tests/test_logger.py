@@ -26,8 +26,9 @@ def test_logger_directory_creation(tmp_path: Path) -> None:
 
     # Replace 'logs' path string with our temporary test directory path
     test_logs_path = tmp_path / "test_logs"
-    content = content.replace('"logs"', f'"{test_logs_path}"')
-    content = content.replace('"logs/app.log"', f'"{test_logs_path}/app.log"')
+    test_logs_str = test_logs_path.as_posix()
+    content = content.replace('"logs"', f'"{test_logs_str}"')
+    content = content.replace('"logs/app.log"', f'"{test_logs_str}/app.log"')
 
     # Ensure it doesn't exist before test
     assert not test_logs_path.exists()
@@ -58,6 +59,15 @@ def test_logger_coverage_import_when_dir_not_exists() -> None:
     logs_dir = Path("logs")
     hidden_dir = Path(".logs_hidden")
 
+    # The file logger holds a lock to `logs/app.log`, so we must close it first
+    # by removing all handlers from the global logger before attempting to rename the dir.
+    try:
+        from coreason_orchestrator.utils.logger import logger
+
+        logger.remove()
+    except Exception:  # noqa: S110
+        pass
+
     if logs_dir.exists():
         logs_dir.rename(hidden_dir)
 
@@ -68,6 +78,13 @@ def test_logger_coverage_import_when_dir_not_exists() -> None:
         importlib.reload(log_module)
         assert Path("logs").exists()
     finally:
+        try:
+            from coreason_orchestrator.utils.logger import logger
+
+            logger.remove()
+        except Exception:  # noqa: S110
+            pass
+
         # Restore original state
         if Path("logs").exists():
             for f in Path("logs").glob("*"):
