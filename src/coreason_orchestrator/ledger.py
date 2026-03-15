@@ -10,7 +10,12 @@
 
 import copy
 
-from coreason_manifest.spec.ontology import AnyStateEvent, EpistemicLedgerState
+from coreason_manifest.spec.ontology import (
+    AnyStateEvent,
+    DefeasibleCascadeEvent,
+    EpistemicLedgerState,
+    RollbackIntent,
+)
 
 from coreason_orchestrator.utils.crypto import calculate_event_hash
 
@@ -50,3 +55,44 @@ def append_event(ledger: EpistemicLedgerState, event: AnyStateEvent) -> Epistemi
     new_history.append(new_event)
 
     return ledger.model_copy(update={"history": new_history})
+
+
+def apply_rollback(
+    ledger: EpistemicLedgerState, rollback: RollbackIntent, cascade: DefeasibleCascadeEvent
+) -> EpistemicLedgerState:
+    """
+    Applies a topological rollback by appending the corresponding RollbackIntent
+    and DefeasibleCascadeEvent strictly adhering to Anti-CRUD philosophies.
+
+    This mathematically isolates falsified branches by recording the invalidation rather
+    than mutating historical arrays in-place.
+
+    Args:
+        ledger: The current crystallized EpistemicLedgerState.
+        rollback: The structured intent identifying the branch to invalidate.
+        cascade: The calculated state differential payload muting specific subgraphs.
+
+    Returns:
+        A completely synthesized new instance of EpistemicLedgerState containing the update.
+    """
+    # Create independent copies to enforce strict mathematical immutability boundaries
+    new_rollback = copy.deepcopy(rollback)
+    new_cascade = copy.deepcopy(cascade)
+
+    # We must synthesize completely new state arrays instead of appending in-place
+    # active_rollbacks and active_cascades may be None based on default pydantic values if optional
+    current_rollbacks = ledger.active_rollbacks if ledger.active_rollbacks is not None else []
+    current_cascades = ledger.active_cascades if ledger.active_cascades is not None else []
+
+    new_active_rollbacks = list(current_rollbacks)
+    new_active_rollbacks.append(new_rollback)
+
+    new_active_cascades = list(current_cascades)
+    new_active_cascades.append(new_cascade)
+
+    return ledger.model_copy(
+        update={
+            "active_rollbacks": new_active_rollbacks,
+            "active_cascades": new_active_cascades,
+        }
+    )
