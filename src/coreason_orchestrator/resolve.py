@@ -92,14 +92,18 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
                 if isinstance(bypassed_steps, list):
                     for step in bypassed_steps:
                         if isinstance(step, dict) and "bypassed_node_id" in step:
-                            completed_nodes.add(step["bypassed_node_id"])
+                            node_id = step["bypassed_node_id"]
+                            if isinstance(node_id, str):
+                                completed_nodes.add(node_id)
 
                 # active_subgraphs is a dict[str, list[NodeIdentifierState]]
                 active_subgraphs = event.payload.get("active_subgraphs", {})
                 if isinstance(active_subgraphs, dict):
                     for subgraph_nodes in active_subgraphs.values():
                         if isinstance(subgraph_nodes, list):
-                            active_subgraphs_set.update(subgraph_nodes)
+                            for n in subgraph_nodes:
+                                if isinstance(n, str):
+                                    active_subgraphs_set.add(n)
 
     # Build adjacency list (forward edges) and in-degree tracking (predecessors)
     adj: dict[str, list[str]] = {str(n): [] for n in nodes}

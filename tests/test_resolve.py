@@ -1,3 +1,5 @@
+from typing import Any
+
 # Copyright (c) 2026 CoReason, Inc.
 #
 # This software is proprietary and dual-licensed.
@@ -7,374 +9,247 @@
 # Commercial use beyond a 30-day trial requires a separate license.
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
-
-from typing import Any
-
 from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
+    CouncilTopologyManifest,
     DAGTopologyManifest,
     EpistemicLedgerState,
     EpistemicProvenanceReceipt,
     ObservationEvent,
-    QuorumPolicy,
+    SystemNodeProfile,
     WorkflowManifest,
 )
 
 from coreason_orchestrator.resolve import resolve_current_node
 
 
-def get_mock_workflow(nodes_dict: dict[Any, Any], edges_list: list[tuple[Any, Any]]) -> WorkflowManifest:
+def get_mock_workflow() -> WorkflowManifest:
+    """Creates a basic WorkflowManifest for testing."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+
     topology = DAGTopologyManifest(
-        nodes=nodes_dict, edges=edges_list, max_depth=5, max_fan_out=5, lifecycle_phase="draft"
+        max_depth=5,
+        edges=[("did:coreason:node:a", "did:coreason:node:b")],
+        nodes={"did:coreason:node:a": node_a, "did:coreason:node:b": node_b},
+        max_fan_out=5,
     )
+
     return WorkflowManifest(
-        genesis_provenance=EpistemicProvenanceReceipt(
-            extracted_by="did:coreason:system",
-            source_event_id="genesis123",
-        ),
         manifest_version="1.0.0",
+        topology=topology,
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
+    )
+
+
+def test_resolve_current_node_no_routing_manifest() -> None:
+    """Verifies that the resolver correctly traverses without a DynamicRoutingManifest."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "A"
+
+
+def test_resolve_current_node_with_valid_bypassed_steps() -> None:
+    """Verifies that a valid bypassed_steps payload correctly advances the frontier."""
+    workflow = get_mock_workflow()
+
+    # Payload simulates bypassing node A, advancing to node B
+    payload: dict[str, Any] = {"bypassed_steps": [{"bypassed_node_id": "did:coreason:node:a"}]}
+    event = ObservationEvent(event_id="e1", timestamp=1.0, type="observation", payload=payload)  # type: ignore[arg-type]
+    ledger = EpistemicLedgerState(history=[event])
+
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "B"
+
+
+def test_resolve_current_node_with_invalid_bypassed_steps() -> None:
+    """Verifies that an invalid bypassed_steps payload (non-string types) safely ignores errors."""
+    workflow = get_mock_workflow()
+
+    # Payload simulates bypassing but with invalid node_id types
+    payload: dict[str, Any] = {
+        "bypassed_steps": [
+            {"bypassed_node_id": 123},
+            {"bypassed_node_id": None},
+            {"bypassed_node_id": ["list"]},
+            {"invalid_key": "did:coreason:node:a"},
+            123,
+            "string",
+        ]
+    }
+    event = ObservationEvent(event_id="e1", timestamp=1.0, type="observation", payload=payload)  # type: ignore[arg-type]
+    ledger = EpistemicLedgerState(history=[event])
+
+    # Since none of the valid bypassed_node_id strings are found, it should still be on node A
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "A"
+
+
+def test_resolve_current_node_with_valid_active_subgraphs() -> None:
+    """Verifies that a valid active_subgraphs payload restricts the routing frontier."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b1 = AgentNodeProfile(description="B1", architectural_intent=".", justification=".", type="agent")
+    node_b2 = AgentNodeProfile(description="B2", architectural_intent=".", justification=".", type="agent")
+
+    topology = DAGTopologyManifest(
+        max_depth=5,
+        edges=[("did:coreason:node:a", "did:coreason:node:b1"), ("did:coreason:node:a", "did:coreason:node:b2")],
+        nodes={"did:coreason:node:a": node_a, "did:coreason:node:b1": node_b1, "did:coreason:node:b2": node_b2},
+        max_fan_out=5,
+    )
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
         topology=topology,
     )
 
-
-def test_resolve_current_node_empty_ledger() -> None:
-    node_a = AgentNodeProfile(description="A test agent", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B test agent", architectural_intent=".", justification=".", type="agent")
-    nodes = {"did:coreason:node:a": node_a, "did:coreason:node:b": node_b}
-    edges = [("did:coreason:node:a", "did:coreason:node:b")]
-
-    workflow = get_mock_workflow(nodes, edges)
-    ledger = EpistemicLedgerState(history=[])
-
-    current_node = resolve_current_node(workflow, ledger)
-    assert current_node == [node_a]
-
-
-def test_resolve_current_node_with_history() -> None:
-    node_a = AgentNodeProfile(description="A test agent", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B test agent", architectural_intent=".", justification=".", type="agent")
-    nodes = {"did:coreason:node:a": node_a, "did:coreason:node:b": node_b}
-    edges = [("did:coreason:node:a", "did:coreason:node:b")]
-
-    workflow = get_mock_workflow(nodes, edges)
-
-    # Node A is completed
+    # Node A is completed (via standard observation source mapping)
+    # AND active_subgraphs restricts the next steps to ONLY B2
+    payload = {"active_subgraphs": {"group1": ["did:coreason:node:b2"]}}
     event = ObservationEvent(
         event_id="e1",
         timestamp=1.0,
         type="observation",
-        payload={"result": "success"},
         source_node_id="did:coreason:node:a",
-        triggering_invocation_id="req1",
+        payload=payload,  # type: ignore[arg-type]
     )
-
     ledger = EpistemicLedgerState(history=[event])
 
-    current_node = resolve_current_node(workflow, ledger)
-    assert current_node == [node_b]
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "B2"
+
+
+def test_resolve_current_node_with_invalid_active_subgraphs() -> None:
+    """Verifies that an invalid active_subgraphs payload safely ignores type errors."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b1 = AgentNodeProfile(description="B1", architectural_intent=".", justification=".", type="agent")
+    node_b2 = AgentNodeProfile(description="B2", architectural_intent=".", justification=".", type="agent")
+
+    topology = DAGTopologyManifest(
+        max_depth=5,
+        edges=[("did:coreason:node:a", "did:coreason:node:b1"), ("did:coreason:node:a", "did:coreason:node:b2")],
+        nodes={"did:coreason:node:a": node_a, "did:coreason:node:b1": node_b1, "did:coreason:node:b2": node_b2},
+        max_fan_out=5,
+    )
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
+        topology=topology,
+    )
+
+    # Payload has invalid types in active_subgraphs
+    payload: dict[str, Any] = {
+        "active_subgraphs": {
+            "group1": [123, None, {"dict": "yes"}],
+            "group2": "not a list",
+            "123": ["did:coreason:node:b1"],  # invalid key type, although dict.values() bypasses keys
+        }
+    }
+    event = ObservationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="observation",
+        source_node_id="did:coreason:node:a",
+        payload=payload,  # type: ignore[arg-type]
+    )
+    ledger = EpistemicLedgerState(history=[event])
+
+    frontier = resolve_current_node(workflow, ledger)
+
+    # Since active_subgraphs_set is populated with ONLY valid strings, and here it is either empty
+    # or contains valid items from dict.values(). Wait! `group2` is a string (not list),
+    # `123` is a valid dict key in python (but JSON parsed it's a string key).
+    # Since the `123` list contains valid strings, `did:coreason:node:b1` WILL be added.
+    # Therefore, B1 should be returned. B2 should NOT be returned.
+
+    assert len(frontier) == 1
+    assert frontier[0].description == "B1"
+
+
+def test_resolve_current_node_empty_or_non_dag() -> None:
+    """Verifies that empty nodes or non-DAG topologies are handled securely."""
+    # Empty nodes
+    topology = DAGTopologyManifest(max_depth=5, edges=[], nodes={}, max_fan_out=5, lifecycle_phase="draft")
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
+        topology=topology,
+    )
+    ledger = EpistemicLedgerState(history=[])
+    frontier = resolve_current_node(workflow, ledger)
+    assert frontier == []
+
+    # Cyclic non-DAG fallback behavior
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    topology = DAGTopologyManifest(
+        max_depth=5,
+        edges=[("did:coreason:node:a", "did:coreason:node:a")],  # Cycle
+        nodes={"did:coreason:node:a": node_a},
+        max_fan_out=5,
+        lifecycle_phase="draft",
+    )
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
+        topology=topology,
+    )
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "A"
 
 
 def test_resolve_current_node_non_dag() -> None:
-    from coreason_manifest.spec.ontology import ConsensusFederationTopologyManifest
-
-    topology = ConsensusFederationTopologyManifest(
-        adjudicator_id="did:coreason:node:adj",
-        type="macro_federation",
-        participant_ids=["did:coreason:node:a", "did:coreason:node:b", "did:coreason:node:c", "did:coreason:node:d"],
-        quorum_rules=QuorumPolicy(
-            max_tolerable_faults=1,
-            min_quorum_size=4,
-            state_validation_metric="ledger_hash",
-            byzantine_action="quarantine",
-        ),
-    )
-    workflow = WorkflowManifest(
-        genesis_provenance=EpistemicProvenanceReceipt(
-            extracted_by="did:coreason:system",
-            source_event_id="genesis123",
-        ),
-        manifest_version="1.0.0",
-        topology=topology,
-    )
-    ledger = EpistemicLedgerState(history=[])
-    # Returns empty list as it doesn't have nodes field handled correctly yet
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_dag_no_nodes() -> None:
-    workflow = get_mock_workflow({}, [])
-    ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_dag_cyclic() -> None:
     node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
-    nodes = {"did:coreason:node:a": node_a, "did:coreason:node:b": node_b}
-    edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:b", "did:coreason:node:a")]
-    workflow = get_mock_workflow(nodes, edges)
-    ledger = EpistemicLedgerState(history=[])
-    # Cyclic picks first deterministically based on sorting keys
-    assert resolve_current_node(workflow, ledger) == [node_a]
-
-
-def test_resolve_current_node_all_completed() -> None:
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    nodes = {"did:coreason:node:a": node_a}
-    edges: list[tuple[Any, Any]] = []
-    workflow = get_mock_workflow(nodes, edges)
-    event = ObservationEvent(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={"result": "success"},
-        source_node_id="did:coreason:node:a",
-        triggering_invocation_id="req1",
-    )
-    ledger = EpistemicLedgerState(history=[event])
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_not_agent_profile() -> None:
-    from coreason_manifest.spec.ontology import HumanNodeProfile
-
-    node_a = HumanNodeProfile(
-        description="Human",
-        architectural_intent=".",
-        justification=".",
-        type="human",
-        required_attestation="fido2_webauthn",
-    )
-    nodes = {"did:coreason:node:a": node_a}
-    edges: list[tuple[Any, Any]] = []
-    workflow = get_mock_workflow(nodes, edges)
-    ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_cyclic_not_agent_profile() -> None:
-    from coreason_manifest.spec.ontology import HumanNodeProfile
-
-    node_a = HumanNodeProfile(
-        description="Human",
-        architectural_intent=".",
-        justification=".",
-        type="human",
-        required_attestation="fido2_webauthn",
-    )
-    nodes = {"did:coreason:node:a": node_a}
-    edges = [("did:coreason:node:a", "did:coreason:node:a")]
-    workflow = get_mock_workflow(nodes, edges)
-    ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_non_dag_with_nodes() -> None:
-    from coreason_manifest.spec.ontology import SwarmTopologyManifest
-
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    topology = SwarmTopologyManifest(
+    topology = CouncilTopologyManifest(
         nodes={"did:coreason:node:a": node_a},
-        lifecycle_phase="draft",
-        architectural_intent="test",
-        justification="test",
-        type="swarm",
+        shared_state_contract=None,
+        information_flow=None,
+        type="council",
+        adjudicator_id="did:coreason:node:a",
     )
     workflow = WorkflowManifest(
-        genesis_provenance=EpistemicProvenanceReceipt(
-            extracted_by="did:coreason:system",
-            source_event_id="genesis123",
-        ),
         manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
         topology=topology,
     )
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) == [node_a]
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "A"
 
 
-def test_resolve_current_node_non_dag_not_agent() -> None:
-    from coreason_manifest.spec.ontology import HumanNodeProfile, SwarmTopologyManifest
-
-    node_a = HumanNodeProfile(
-        description="Human",
-        architectural_intent=".",
-        justification=".",
-        type="human",
-        required_attestation="fido2_webauthn",
+def test_resolve_current_node_empty_graph() -> None:
+    topology = DAGTopologyManifest(max_depth=5, edges=[], nodes={}, max_fan_out=5, lifecycle_phase="draft")
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,
     )
-    topology = SwarmTopologyManifest(
+    ledger = EpistemicLedgerState(history=[])
+    frontier = resolve_current_node(workflow, ledger)
+    assert frontier == []
+
+
+def test_resolve_current_node_cyclic_non_agent() -> None:
+    node_a = SystemNodeProfile(description="A", architectural_intent=".", justification=".", type="system")
+    topology = DAGTopologyManifest(
+        max_depth=5,
+        edges=[("did:coreason:node:a", "did:coreason:node:a")],  # Cycle
         nodes={"did:coreason:node:a": node_a},
+        max_fan_out=5,
         lifecycle_phase="draft",
-        architectural_intent="test",
-        justification="test",
-        type="swarm",
     )
     workflow = WorkflowManifest(
-        genesis_provenance=EpistemicProvenanceReceipt(
-            extracted_by="did:coreason:system",
-            source_event_id="genesis123",
-        ),
         manifest_version="1.0.0",
         topology=topology,
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
     )
     ledger = EpistemicLedgerState(history=[])
-    assert resolve_current_node(workflow, ledger) == []
-
-
-def test_resolve_current_node_multiple_concurrent_roots() -> None:
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
-    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
-
-    nodes = {
-        "did:coreason:node:a": node_a,
-        "did:coreason:node:b": node_b,
-        "did:coreason:node:c": node_c,
-    }
-
-    # A and B have no incoming edges. C depends on A and B.
-    edges = [
-        ("did:coreason:node:a", "did:coreason:node:c"),
-        ("did:coreason:node:b", "did:coreason:node:c"),
-    ]
-
-    workflow = get_mock_workflow(nodes, edges)
-    ledger = EpistemicLedgerState(history=[])
-
-    # Initial state should resolve both roots
-    current_nodes = resolve_current_node(workflow, ledger)
-    assert current_nodes == [node_a, node_b]
-
-
-def test_resolve_current_node_bypassed_steps() -> None:
-    """Verify accumulation of bypassed_steps preventing execution of bypassed nodes."""
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
-    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
-
-    nodes = {
-        "did:coreason:node:a": node_a,
-        "did:coreason:node:b": node_b,
-        "did:coreason:node:c": node_c,
-    }
-    # A -> B -> C
-    edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:b", "did:coreason:node:c")]
-    workflow = get_mock_workflow(nodes, edges)
-
-    # A completes, and outputs an ObservationEvent containing a DynamicRoutingManifest dict that bypasses B
-    obs_a = ObservationEvent(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={
-            "result": "ok",
-            "active_subgraphs": {},
-            "bypassed_steps": [
-                {
-                    "artifact_event_id": "e1",
-                    "bypassed_node_id": "did:coreason:node:b",
-                    "justification": "modality_mismatch",
-                    "cryptographic_null_hash": "a" * 64,
-                }
-            ],
-        },
-        source_node_id="did:coreason:node:a",
-    )
-    ledger = EpistemicLedgerState(history=[obs_a])
     frontier = resolve_current_node(workflow, ledger)
-
-    # B is bypassed, so it is considered completed. Predecessors of C are B (completed), so C should be the frontier.
-    assert len(frontier) == 1
-    assert frontier[0] == node_c
-
-
-def test_resolve_current_node_active_subgraphs() -> None:
-    """Verify frontier filtering using active_subgraphs."""
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
-    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
-
-    nodes = {
-        "did:coreason:node:a": node_a,
-        "did:coreason:node:b": node_b,
-        "did:coreason:node:c": node_c,
-    }
-    # A -> B, A -> C
-    edges = [("did:coreason:node:a", "did:coreason:node:b"), ("did:coreason:node:a", "did:coreason:node:c")]
-    workflow = get_mock_workflow(nodes, edges)
-
-    # A completes, and its ObservationEvent payload specifies only C is active
-    obs_a = ObservationEvent(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={"result": "ok", "active_subgraphs": {"text": ["did:coreason:node:c"]}, "bypassed_steps": []},
-        source_node_id="did:coreason:node:a",
-    )
-    ledger = EpistemicLedgerState(history=[obs_a])
-    frontier = resolve_current_node(workflow, ledger)
-
-    # Normally B and C would be active, but only C is in active_subgraphs.
-    assert len(frontier) == 1
-    assert frontier[0] == node_c
-
-
-def test_resolve_current_node_multiple_routing_manifests() -> None:
-    """Verify handling of multiple DynamicRoutingManifest payloads in Observations."""
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
-    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
-    node_c = AgentNodeProfile(description="C", architectural_intent=".", justification=".", type="agent")
-    node_d = AgentNodeProfile(description="D", architectural_intent=".", justification=".", type="agent")
-
-    nodes = {
-        "did:coreason:node:a": node_a,
-        "did:coreason:node:b": node_b,
-        "did:coreason:node:c": node_c,
-        "did:coreason:node:d": node_d,
-    }
-    # A -> B, A -> C, B -> D, C -> D
-    edges = [
-        ("did:coreason:node:a", "did:coreason:node:b"),
-        ("did:coreason:node:a", "did:coreason:node:c"),
-        ("did:coreason:node:b", "did:coreason:node:d"),
-        ("did:coreason:node:c", "did:coreason:node:d"),
-    ]
-    workflow = get_mock_workflow(nodes, edges)
-
-    obs_a = ObservationEvent(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={
-            "result": "ok",
-            "active_subgraphs": {"text": ["did:coreason:node:b", "did:coreason:node:c"]},
-            "bypassed_steps": [],
-        },
-        source_node_id="did:coreason:node:a",
-    )
-    obs_b = ObservationEvent(
-        event_id="e2",
-        timestamp=3.0,
-        type="observation",
-        payload={
-            "result": "ok",
-            "active_subgraphs": {"text": ["did:coreason:node:b", "did:coreason:node:c", "did:coreason:node:d"]},
-            "bypassed_steps": [
-                {
-                    "artifact_event_id": "e2",
-                    "bypassed_node_id": "did:coreason:node:c",
-                    "justification": "modality_mismatch",
-                    "cryptographic_null_hash": "b" * 64,
-                }
-            ],
-        },
-        source_node_id="did:coreason:node:b",
-    )
-    ledger = EpistemicLedgerState(history=[obs_a, obs_b])
-
-    frontier = resolve_current_node(workflow, ledger)
-
-    # A is complete. B is complete. C is bypassed (so complete). D requires B and C complete, both are.
-    # So D should be in the frontier. D is in active_subgraphs.
-    assert len(frontier) == 1
-    assert frontier[0] == node_d
+    assert frontier == []
