@@ -12,6 +12,7 @@ import asyncio
 import time
 
 from coreason_manifest.spec.ontology import (
+    ActionSpaceManifest,
     AgentNodeProfile,
     BargeInInterruptEvent,
     EpistemicLedgerState,
@@ -43,11 +44,13 @@ class CoreOrchestrator:
         ledger: EpistemicLedgerState,
         inference_engine: InferenceEngineProtocol,
         actuator_engine: ActuatorEngineProtocol,
+        action_space_registry: dict[str, "ActionSpaceManifest"] | None = None,
     ) -> None:
         self.workflow = workflow
         self.ledger = ledger
         self.inference_engine = inference_engine
         self.actuator_engine = actuator_engine
+        self.action_space_registry = action_space_registry or {}
         self._ledger_lock = asyncio.Lock()
         self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
 
@@ -190,20 +193,28 @@ class CoreOrchestrator:
 
         if pending_tools:
             # We need to dispatch the kinetic actuator for all pending tools.
-            from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
-
             async with asyncio.TaskGroup() as tg:
                 for intent in pending_tools:
-                    # Natively synthesize a ToolManifest strictly to satisfy the protocol boundary
-                    # In a real environment, the ToolManifest is mapped from the node's capabilities.
-                    manifest = ToolManifest(
-                        tool_name=intent.tool_name,
-                        description="Dynamically resolved tool",
-                        input_schema={"type": "object", "properties": {}, "required": []},
-                        side_effects=SideEffectProfile(is_idempotent=False, mutates_state=True),
-                        permissions=PermissionBoundaryPolicy(network_access=True, file_system_mutation_forbidden=False),
-                    )
-                    tg.create_task(self.delegate_to_kinetic_plane(intent, manifest))
+                    # Verify the tool against the active node's ActionSpaceManifest
+                    # We evaluate the active nodes on the frontier to find the authorized tool.
+                    found_manifest = None
+                    if frontier_nodes:
+                        for node in frontier_nodes:
+                            if node.action_space_id and node.action_space_id in self.action_space_registry:
+                                action_space = self.action_space_registry[node.action_space_id]
+                                for tool in action_space.native_tools:
+                                    if tool.tool_name == intent.tool_name:
+                                        found_manifest = tool
+                                        break
+                                if found_manifest:
+                                    break
+
+                    if not found_manifest:
+                        # FR-4.1: The Orchestrator MUST verify any requested ToolInvocationEvent
+                        # against the allowed ActionSpaceManifest bound to the current node.
+                        raise RuntimeError(f"Tool '{intent.tool_name}' not found in the allowed ActionSpaceManifest.")
+
+                    tg.create_task(self.delegate_to_kinetic_plane(intent, found_manifest))
             return True
 
         # 3. If no pending kinetic task, delegate to the Cognitive Plane concurrently for all nodes in the frontier

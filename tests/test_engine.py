@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 import pytest
 from coreason_manifest.spec.ontology import (
+    ActionSpaceManifest,
     AgentAttestationReceipt,
     AgentNodeProfile,
     BargeInInterruptEvent,
@@ -386,7 +387,9 @@ async def test_tick_cognitive_delegation() -> None:
 @pytest.mark.asyncio
 async def test_tick_kinetic_delegation() -> None:
     """Verifies tick delegates to kinetic plane when latest event is ToolInvocationEvent."""
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="test_space"
+    )
     workflow = get_mock_workflow()
     new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
     workflow = workflow.model_copy(update={"topology": new_topo})
@@ -418,11 +421,20 @@ async def test_tick_kinetic_delegation() -> None:
     actuator_engine = AsyncMock()
     actuator_engine.execute.return_value = {"status": "ok"}
 
+    manifest = ToolManifest(
+        tool_name="test_tool",
+        description="A test tool",
+        input_schema={"type": "object", "properties": {}, "required": []},
+        side_effects=SideEffectProfile(is_idempotent=True, mutates_state=False),
+        permissions=PermissionBoundaryPolicy(network_access=False, file_system_mutation_forbidden=True),
+    )
+    action_space = ActionSpaceManifest(action_space_id="test_space", native_tools=[manifest])
     orchestrator = CoreOrchestrator(
         workflow=workflow,
         ledger=ledger,
         inference_engine=inference_engine,
         actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
     )
 
     result = await orchestrator.tick()
@@ -555,3 +567,55 @@ async def test_run_event_loop_general_exception(capsys: pytest.CaptureFixture[st
     # Verify that the state was dumped to stdout
     captured = capsys.readouterr()
     assert ledger.model_dump_json() in captured.out
+
+
+@pytest.mark.asyncio
+async def test_tick_kinetic_delegation_tool_not_found() -> None:
+    """Verifies that an exception is raised when tool is missing from ActionSpaceManifest."""
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="test_space"
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    intent = ToolInvocationEvent(
+        event_id="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        timestamp=1.0,
+        type="tool_invocation",
+        tool_name="missing_tool",
+        parameters={},
+        authorized_budget_magnitude=0,
+        agent_attestation=AgentAttestationReceipt(
+            training_lineage_hash="a" * 64,
+            developer_signature="sig",
+            capability_merkle_root="b" * 64,
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt(
+            proof_protocol="zk-SNARK",
+            public_inputs_hash="c" * 64,
+            verifier_key_id="key1",
+            cryptographic_blob="blob1",
+            latent_state_commitments={},
+        ),
+    )
+    ledger = EpistemicLedgerState(history=[intent])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    actuator_engine.execute.return_value = {"status": "ok"}
+
+    action_space = ActionSpaceManifest(action_space_id="test_space", native_tools=[])
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
+    )
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        await orchestrator.tick()
+
+    assert "not found in the allowed ActionSpaceManifest" in str(exc_info.value.exceptions[0])
