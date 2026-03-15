@@ -49,8 +49,7 @@ def test_append_event_system_fault() -> None:
     assert new_event.event_id != "placeholder"
 
     # Verify the hash matches expectation for temp event
-    temp_event = event.model_copy(update={"event_id": ""})
-    expected_hash = calculate_event_hash(temp_event)
+    expected_hash = calculate_event_hash(event.model_dump(exclude={"event_id"}))
     assert new_event.event_id == expected_hash
 
 
@@ -98,7 +97,7 @@ def test_append_event_hypothesis(payload: dict[str, Any]) -> None:
     new_event = new_ledger.history[0]
     assert isinstance(new_event, ObservationEvent)
     assert new_event.event_id != "placeholder"
-    assert new_event.event_id == calculate_event_hash(event.model_copy(update={"event_id": ""}))
+    assert new_event.event_id == calculate_event_hash(event.model_dump(exclude={"event_id"}))
 
 
 def test_apply_rollback_basic() -> None:

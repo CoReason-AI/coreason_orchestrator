@@ -28,6 +28,32 @@ class MockComplexEvent(BaseModel):
     flags: list[bool]
 
 
+class MockNoEventIdEvent(BaseModel):
+    data: str
+
+
+class MockDefaultCoercionEvent(BaseModel):
+    event_id: str
+    count: int
+    status: str = "pending"
+
+
+def test_event_factory_no_event_id() -> None:
+    """Test that EventFactory generates event correctly even if event_id is missing."""
+    event = EventFactory.build_event(MockNoEventIdEvent, data="test_data")
+    assert not hasattr(event, "event_id")
+    assert event.data == "test_data"
+
+
+def test_event_factory_with_pre_existing_event_id() -> None:
+    """Test that EventFactory generates event correctly even if event_id is pre-existing."""
+    event = EventFactory.build_event(MockSimpleEvent, event_id="fake_id", data="test_data", count=42)
+
+    temp_event = MockSimpleEvent(event_id="", data="test_data", count=42)
+    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+    assert event.event_id == expected_hash
+
+
 def test_event_factory_creates_event_with_hash() -> None:
     """Test that EventFactory generates a mathematically bound RFC 8785 hash and assigns it."""
     # Build event using factory
@@ -35,11 +61,25 @@ def test_event_factory_creates_event_with_hash() -> None:
 
     # Reconstruct what the temporary payload should have been
     temp_event = MockSimpleEvent(event_id="", data="test_data", count=42)
-    expected_hash = calculate_event_hash(temp_event)
+    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
 
     assert event.event_id == expected_hash
     assert event.data == "test_data"
     assert event.count == 42
+
+
+def test_event_factory_with_defaults_and_coercion() -> None:
+    """Test that EventFactory correctly incorporates Pydantic's default values and type coercion into the hash."""
+    # Pass string "42" instead of int 42, and omit the status field to trigger the default "pending"
+    event = EventFactory.build_event(MockDefaultCoercionEvent, count="42")  # type: ignore[arg-type]
+
+    # The expected hash MUST be computed from the coerced and defaulted values
+    temp_event = MockDefaultCoercionEvent(event_id="", count=42, status="pending")
+    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+
+    assert event.event_id == expected_hash
+    assert event.count == 42
+    assert event.status == "pending"
 
 
 @given(  # type: ignore[misc]
@@ -69,7 +109,7 @@ def test_event_factory_with_complex_types(nested: dict[str, str | int], flags: l
 
     # Reconstruct what the temporary payload should have been
     temp_event = MockComplexEvent(event_id="", nested=nested, flags=flags)
-    expected_hash = calculate_event_hash(temp_event)
+    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
 
     assert event.event_id == expected_hash
     assert event.nested == nested
