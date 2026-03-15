@@ -15,8 +15,8 @@ from coreason_manifest.spec.ontology import (
     AnyIntent,
     AnyStateEvent,
     EpistemicLedgerState,
+    JsonPrimitiveState,
     LatentScratchpadReceipt,
-    ObservationEvent,
     StateHydrationManifest,
     TokenBurnReceipt,
     ToolInvocationEvent,
@@ -44,7 +44,7 @@ class InferenceEngineProtocol(Protocol):
 class ActuatorEngineProtocol(Protocol):
     async def execute(
         self, intent: ToolInvocationEvent, manifest: ToolManifest, ledger_manifest: StateHydrationManifest
-    ) -> ObservationEvent:
+    ) -> JsonPrimitiveState:
         """
         Dispatches a mathematical intent to the Kinetic Plane.
         Accepts a StateHydrationManifest to prevent massive IPC serialization overhead,
