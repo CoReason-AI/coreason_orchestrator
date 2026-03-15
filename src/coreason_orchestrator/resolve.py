@@ -17,10 +17,10 @@ from coreason_manifest.spec.ontology import (
 )
 
 
-def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerState) -> AgentNodeProfile | None:
+def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerState) -> list[AgentNodeProfile]:
     """
     Evaluates the AnyTopologyManifest discriminator within the root WorkflowManifest
-    to deterministically resolve the current active AgentNodeProfile based on the
+    to deterministically resolve the active execution frontier based on the
     most recent events in the ledger.
 
     Args:
@@ -28,26 +28,28 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
         ledger: The cryptographically sealed EpistemicLedgerState.
 
     Returns:
-        The strictly typed AgentNodeProfile representing the active cursor, or None if terminal.
+        A list of strictly typed AgentNodeProfile objects representing the active cursor.
+        Returns an empty list if terminal.
     """
     topology = workflow.topology
 
     # Only DAGTopologyManifest has explicit edges to traverse in this simple implementation
     if not isinstance(topology, DAGTopologyManifest):
-        # For non-DAG topologies, or empty node sets, we might not resolve a deterministic single node
-        # We can default to the first available node if present
+        # For non-DAG topologies, or empty node sets, we might not resolve a deterministic frontier
+        # We can default to all available agent nodes if present
+        frontier: list[AgentNodeProfile] = []
         if hasattr(topology, "nodes") and topology.nodes:
-            first_key = next(iter(topology.nodes))
-            node = topology.nodes[first_key]
-            if isinstance(node, AgentNodeProfile):
-                return node
-        return None
+            for node_id in sorted(topology.nodes.keys()):
+                node = topology.nodes[node_id]
+                if isinstance(node, AgentNodeProfile):
+                    frontier.append(node)
+        return frontier
 
     nodes = topology.nodes
     edges = topology.edges
 
     if not nodes:
-        return None
+        return []
 
     # Determine nodes with in-degree 0 (roots)
     has_incoming = {dst for _, dst in edges}
@@ -58,11 +60,11 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
 
     if not roots:
         # Cyclic without a clear root or empty graph
-        first_key = next(iter(nodes))
+        first_key = next(iter(sorted(nodes.keys())))
         node = nodes[first_key]
         if isinstance(node, AgentNodeProfile):
-            return node
-        return None
+            return [node]
+        return []
 
     # Track execution history
     # A node is considered completed if there is an EpistemicFlowStateReceipt
@@ -76,30 +78,31 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
         # Note: EpistemicFlowStateReceipt does not hold a source_node_id directly in the current ontology version,
         # but ObservationEvent strictly binds source_node_id.
 
-    # BFS or simple linear topological search
-    # Find the first node that hasn't been completed but whose predecessors are all completed
-
-    # Build adjacency list
+    # Build adjacency list (forward edges) and in-degree tracking (predecessors)
     adj: dict[str, list[str]] = {str(n): [] for n in nodes}
+    preds: dict[str, set[str]] = {str(n): set() for n in nodes}
     for src, dst in edges:
         adj[str(src)].append(str(dst))
+        preds[str(dst)].add(str(src))
 
-    queue = [str(r) for r in roots]
+    active_frontier: list[AgentNodeProfile] = []
 
-    # This is a basic topological traversal to find the frontier
-    while queue:
-        # Pop deterministically
-        queue.sort()
-        curr = queue.pop(0)
+    # To find all nodes in the frontier:
+    # A node is in the frontier if it is NOT completed, but ALL its predecessors ARE completed.
+    for node_id in sorted(nodes.keys()):
+        if node_id in completed_nodes:
+            continue
 
-        if curr not in completed_nodes:
-            node = nodes[curr]
+        # Check if all predecessors are completed
+        predecessors_completed = True
+        for pred in preds[node_id]:
+            if pred not in completed_nodes:
+                predecessors_completed = False
+                break
+
+        if predecessors_completed:
+            node = nodes[node_id]
             if isinstance(node, AgentNodeProfile):
-                return node
-            return None
+                active_frontier.append(node)
 
-        # If completed, add neighbors
-        queue.extend(adj.get(curr, []))
-
-    # All nodes are completed
-    return None
+    return active_frontier
