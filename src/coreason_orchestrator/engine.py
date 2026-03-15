@@ -1,3 +1,5 @@
+import asyncio
+
 # Copyright (c) 2026 CoReason, Inc.
 #
 # This software is proprietary and dual-licensed.
@@ -7,7 +9,6 @@
 # Commercial use beyond a 30-day trial requires a separate license.
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
-
 import time
 
 from coreason_manifest.spec.ontology import (
@@ -24,6 +25,7 @@ from coreason_manifest.spec.ontology import (
 from coreason_orchestrator.hydration import compile_state_hydration
 from coreason_orchestrator.interfaces import ActuatorEngineProtocol, InferenceEngineProtocol
 from coreason_orchestrator.ledger import append_event
+from coreason_orchestrator.resolve import resolve_current_node
 
 
 class CoreOrchestrator:
@@ -155,3 +157,54 @@ class CoreOrchestrator:
             burn_magnitude=burn_magnitude,
         )
         self.ledger = append_event(self.ledger, burn_receipt)
+
+    async def tick(self) -> bool:
+        """
+        Executes a deterministic asynchronous tick evaluating the topological frontier.
+
+        Returns:
+            True if work was performed, False if the graph is fully resolved or halted.
+        """
+        # 1. Resolve current topological cursor
+        current_node = resolve_current_node(self.workflow, self.ledger)
+        if not current_node:
+            return False
+
+        # 2. Evaluate if the kinetic plane needs to resolve a pending tool
+        if self.ledger.history:
+            latest_event = self.ledger.history[-1]
+            if isinstance(latest_event, ToolInvocationEvent):
+                # We need to dispatch the kinetic actuator.
+                from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
+
+                # Natively synthesize a ToolManifest strictly to satisfy the protocol boundary
+                # In a real environment, the ToolManifest is mapped from the node's capabilities.
+                manifest = ToolManifest(
+                    tool_name=latest_event.tool_name,
+                    description="Dynamically resolved tool",
+                    input_schema={"type": "object", "properties": {}, "required": []},
+                    side_effects=SideEffectProfile(is_idempotent=False, mutates_state=True),
+                    permissions=PermissionBoundaryPolicy(network_access=True, file_system_mutation_forbidden=False),
+                )
+                await self.delegate_to_kinetic_plane(latest_event, manifest)
+                return True
+
+        # 3. If no pending kinetic task, delegate to the Cognitive Plane
+        await self.delegate_to_cognitive_plane(current_node)
+        return True
+
+    async def run_event_loop(self) -> None:
+        """
+        Operates the primary asynchronous tick-cycle.
+
+        Utilizes native asyncio.TaskGroup to manage execution, continually
+        evaluating the topological frontier via `tick()` until the graph is
+        fully resolved or halted by an interrupt.
+        """
+        async with asyncio.TaskGroup() as _tg:
+            while True:
+                has_work = await self.tick()
+                if not has_work:
+                    break
+                # Yield to event loop to prevent starvation
+                await asyncio.sleep(0)
