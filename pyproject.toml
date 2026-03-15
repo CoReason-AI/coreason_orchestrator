@@ -14,6 +14,7 @@ authors = [
 dependencies = [
     "coreason-manifest>=0.26.1",
     "loguru>=0.7.2",
+    "pydantic>=2.12.5",
 ]
 license = { file = "LICENSE" }
 classifiers = [

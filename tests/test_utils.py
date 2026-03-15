@@ -25,7 +25,14 @@ def test_logger_initialization() -> None:
 
     # Reloading the module makes sure the directory is created if it was deleted
     # by another test (like test_logger.py)
-    importlib.reload(log_module)
+    import sys
+
+    try:
+        if log_module.__name__ not in sys.modules:
+            sys.modules[log_module.__name__] = log_module
+        importlib.reload(log_module)
+    except ImportError:
+        pass
 
     log_path = Path("logs")
     assert log_path.exists()
