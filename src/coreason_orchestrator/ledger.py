@@ -9,9 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
 import copy
+from typing import Any
 
 from coreason_manifest.spec.ontology import (
-    AnyStateEvent,
     DefeasibleCascadeEvent,
     EpistemicLedgerState,
     RollbackIntent,
@@ -20,9 +20,9 @@ from coreason_manifest.spec.ontology import (
 from coreason_orchestrator.utils.crypto import calculate_event_hash
 
 
-def append_event(ledger: EpistemicLedgerState, event: AnyStateEvent) -> EpistemicLedgerState:
+def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerState:
     """
-    Appends a new state event to the epistemic ledger enforcing the immutable append-only
+    Appends a new state event or intent to the epistemic ledger enforcing the immutable append-only
     Merkle-DAG causal chain.
 
     This function does NOT mutate the original `ledger` or `event`. It strictly adheres to
@@ -31,7 +31,7 @@ def append_event(ledger: EpistemicLedgerState, event: AnyStateEvent) -> Epistemi
 
     Args:
         ledger: The current crystallized EpistemicLedgerState.
-        event: The newly synthesized AnyStateEvent.
+        event: The newly synthesized AnyStateEvent or AnyIntent.
 
     Returns:
         A new instance of EpistemicLedgerState with the mathematically bound event appended.
@@ -39,7 +39,7 @@ def append_event(ledger: EpistemicLedgerState, event: AnyStateEvent) -> Epistemi
     # Create an independent copy to strictly enforce Anti-CRUD and non-mutation
     new_event = copy.deepcopy(event)
 
-    # 1. Synthesize the new AnyStateEvent (handled via argument)
+    # 1. Synthesize the new event (handled via argument)
     # 2. Assign the calculated RFC 8785 JSON Control Hash strictly to the event_id property
     # We must ensure the hash calculation is deterministic and doesn't depend on the
     # placeholder event_id itself. A standard approach is to nullify the event_id
