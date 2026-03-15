@@ -17,7 +17,7 @@ from coreason_manifest.spec.ontology import (
     RollbackIntent,
 )
 
-from coreason_orchestrator.utils.crypto import calculate_event_hash
+from coreason_orchestrator.factory import EventFactory
 
 
 def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerState:
@@ -36,23 +36,16 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
     Returns:
         A new instance of EpistemicLedgerState with the mathematically bound event appended.
     """
-    # Create an independent copy to strictly enforce Anti-CRUD and non-mutation
-    new_event = copy.deepcopy(event)
+    # 1. Synthesize the mathematically bound event using EventFactory to ensure
+    # the RFC 8785 hash is deterministically bound prior to final instantiation.
+    # We dump the passed in event's parameters to rebuild it strictly through the factory
+    event_kwargs = event.model_dump(exclude={"event_id"})
+    crystallized_event = EventFactory.build_event(type(event), **event_kwargs)
 
-    # 1. Synthesize the new event (handled via argument)
-    # 2. Assign the calculated RFC 8785 JSON Control Hash strictly to the event_id property
-    # We must ensure the hash calculation is deterministic and doesn't depend on the
-    # placeholder event_id itself. A standard approach is to nullify the event_id
-    # before hashing.
-    temp_event = new_event.model_copy(update={"event_id": ""})
-    new_event_hash = calculate_event_hash(temp_event)
-
-    new_event = new_event.model_copy(update={"event_id": new_event_hash})
-
-    # 3. Append the crystallized event to the history array
+    # 2. Append the crystallized event to the history array
     # Since ledger is an immutable snapshot, we create a new ledger object.
     new_history = list(ledger.history)
-    new_history.append(new_event)
+    new_history.append(crystallized_event)
 
     return ledger.model_copy(update={"history": new_history})
 
