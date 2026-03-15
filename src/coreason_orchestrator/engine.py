@@ -22,6 +22,7 @@ from coreason_manifest.spec.ontology import (
     WorkflowManifest,
 )
 
+from coreason_orchestrator.factory import EventFactory
 from coreason_orchestrator.hydration import compile_state_hydration
 from coreason_orchestrator.interfaces import ActuatorEngineProtocol, InferenceEngineProtocol
 from coreason_orchestrator.ledger import append_event
@@ -97,8 +98,8 @@ class CoreOrchestrator:
         if not isinstance(raw_payload, dict):
             raw_payload = {"result": raw_payload}
 
-        observation = ObservationEvent(
-            event_id="",  # The ledger append_event handles RFC 8785 hashing
+        observation = EventFactory.build_event(
+            ObservationEvent,
             timestamp=time.time(),
             type="observation",
             payload=raw_payload,
@@ -148,8 +149,8 @@ class CoreOrchestrator:
         # So we use penalized_node_id here implicitly.
         _ = penalized_node_id
 
-        burn_receipt = TokenBurnReceipt(
-            event_id="",  # The ledger append_event handles RFC 8785 hashing
+        burn_receipt = EventFactory.build_event(
+            TokenBurnReceipt,
             timestamp=time.time(),
             type="token_burn",
             tool_invocation_id=invocation_id,
