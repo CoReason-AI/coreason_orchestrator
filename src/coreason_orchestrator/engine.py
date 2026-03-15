@@ -220,10 +220,20 @@ class CoreOrchestrator:
         evaluating the topological frontier via `tick()` until the graph is
         fully resolved or halted by an interrupt.
         """
-        async with asyncio.TaskGroup() as _tg:
-            while True:
-                has_work = await self.tick()
-                if not has_work:
-                    break
-                # Yield to event loop to prevent starvation
-                await asyncio.sleep(0)
+        try:
+            async with asyncio.TaskGroup() as _tg:
+                while True:
+                    has_work = await self.tick()
+                    if not has_work:
+                        break
+                    # Yield to event loop to prevent starvation
+                    await asyncio.sleep(0)
+        except Exception:
+            # 7. State Dumps: In the event of an unhandled Python crash or fatal cryptographic tamper fault,
+            # the Orchestrator MUST execute a final .model_dump_json() of the current EpistemicLedgerState
+            # to stdout, preserving W3C DIDs and cryptographic hashes to allow for cold-start disaster recovery.
+            import sys
+
+            sys.stdout.write(self.ledger.model_dump_json() + "\n")
+            sys.stdout.flush()
+            raise
