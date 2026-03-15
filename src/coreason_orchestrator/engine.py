@@ -224,13 +224,16 @@ class CoreOrchestrator:
 
         return True
 
-    async def run_event_loop(self) -> None:
+    async def run_event_loop(self) -> EpistemicLedgerState:
         """
         Operates the primary asynchronous tick-cycle.
 
         Utilizes native asyncio.TaskGroup to manage execution, continually
         evaluating the topological frontier via `tick()` until the graph is
         fully resolved or halted by an interrupt.
+
+        Returns:
+            The final crystallized EpistemicLedgerState after the graph is fully resolved or halted.
         """
         main_task = asyncio.current_task()
 
@@ -274,3 +277,5 @@ class CoreOrchestrator:
             # Prevent the listener from hanging around after natural loop completion
             if not listener_task.done():
                 listener_task.cancel()
+
+        return self.ledger
