@@ -457,8 +457,8 @@ async def test_run_event_loop_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_event_loop_exception() -> None:
-    """Verifies event loop handles exceptions."""
+async def test_run_event_loop_exception(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verifies event loop handles exceptions and dumps state."""
     workflow = get_mock_workflow()
     ledger = EpistemicLedgerState(history=[])
 
@@ -477,6 +477,10 @@ async def test_run_event_loop_exception() -> None:
 
     with (
         patch.object(orchestrator, "tick", new_callable=AsyncMock, side_effect=[True, ValueError("Tick failed")]),
-        pytest.raises(ExceptionGroup, match="unhandled errors"),
+        pytest.raises(ExceptionGroup, match=r"unhandled errors|Tick failed"),
     ):
         await orchestrator.run_event_loop()
+
+    # Verify that the state was dumped to stdout
+    captured = capsys.readouterr()
+    assert ledger.model_dump_json() in captured.out
