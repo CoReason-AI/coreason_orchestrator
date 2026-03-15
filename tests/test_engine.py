@@ -14,6 +14,7 @@ import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
     AgentNodeProfile,
+    BargeInInterruptEvent,
     DAGTopologyManifest,
     EpistemicLedgerState,
     EpistemicProvenanceReceipt,
@@ -256,3 +257,65 @@ async def test_delegate_to_kinetic_plane_primitive_payload() -> None:
     assert isinstance(observation, ObservationEvent)
     assert observation.payload == {"result": "primitive_success"}
     assert observation.triggering_invocation_id == "tool_inv_456"
+
+
+@pytest.mark.asyncio
+async def test_handle_preemption() -> None:
+    """Verifies that preemption intercepts correctly map to discarding."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    barge_in_event = BargeInInterruptEvent(
+        event_id="initial_barge_in",
+        timestamp=1.0,
+        type="barge_in",
+        target_event_id="none_yet",
+        sensory_trigger=None,
+        retained_partial_payload=None,
+        epistemic_disposition="retain_as_context",
+    )
+
+    orchestrator.handle_preemption(barge_in_event, "tool_inv_running_123")
+
+    assert len(orchestrator.ledger.history) == 1
+    terminal_event = orchestrator.ledger.history[0]
+
+    assert isinstance(terminal_event, BargeInInterruptEvent)
+    assert terminal_event.target_event_id == "tool_inv_running_123"
+    assert terminal_event.epistemic_disposition == "discard"
+
+
+@pytest.mark.asyncio
+async def test_slash_byzantine_fault() -> None:
+    """Verifies that a byzantine fault appends a token burn receipt."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    orchestrator.slash_byzantine_fault("did:coreason:agent:evil_node", "bad_invocation_456", 500)
+
+    assert len(orchestrator.ledger.history) == 1
+    burn_receipt = orchestrator.ledger.history[0]
+
+    assert isinstance(burn_receipt, TokenBurnReceipt)
+    assert burn_receipt.tool_invocation_id == "bad_invocation_456"
+    assert burn_receipt.burn_magnitude == 500
+    assert burn_receipt.input_tokens == 0
+    assert burn_receipt.output_tokens == 0
