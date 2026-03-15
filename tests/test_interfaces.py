@@ -14,8 +14,8 @@ from coreason_manifest.spec.ontology import (
     AnyIntent,
     AnyStateEvent,
     EpistemicLedgerState,
+    JsonPrimitiveState,
     LatentScratchpadReceipt,
-    ObservationEvent,
     StateHydrationManifest,
     TokenBurnReceipt,
     ToolInvocationEvent,
@@ -57,7 +57,7 @@ def test_actuator_engine_protocol_typing() -> None:
     class MockActuatorEngine:
         async def execute(
             self, intent: ToolInvocationEvent, manifest: ToolManifest, ledger_manifest: StateHydrationManifest
-        ) -> ObservationEvent:
+        ) -> JsonPrimitiveState:
             # Simple mock implementation to satisfy the type checker.
             raise NotImplementedError
 
