@@ -49,6 +49,7 @@ class CoreOrchestrator:
         self.inference_engine = inference_engine
         self.actuator_engine = actuator_engine
         self._ledger_lock = asyncio.Lock()
+        self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
 
     async def delegate_to_cognitive_plane(self, node: AgentNodeProfile) -> None:
         """
@@ -220,14 +221,35 @@ class CoreOrchestrator:
         evaluating the topological frontier via `tick()` until the graph is
         fully resolved or halted by an interrupt.
         """
+        main_task = asyncio.current_task()
+
+        async def _listen_for_interrupts() -> None:
+            """
+            Asynchronously waits for a preemption signal.
+
+            Upon receiving a BargeInInterruptEvent, it safely handles the preemption
+            and forcefully cancels the main task, cascading cancellation down to all
+            currently executing nested TaskGroups.
+            """
+            interrupt_event, invocation_id = await self.interrupt_queue.get()
+            async with self._ledger_lock:
+                self.handle_preemption(interrupt_event, invocation_id)
+            # Preempt the active loop to enforce FR-5.2 Cascade Cancellation
+            if main_task and not main_task.done():
+                main_task.cancel()
+
+        listener_task = asyncio.create_task(_listen_for_interrupts())
+
         try:
-            async with asyncio.TaskGroup() as _tg:
-                while True:
-                    has_work = await self.tick()
-                    if not has_work:
-                        break
-                    # Yield to event loop to prevent starvation
-                    await asyncio.sleep(0)
+            while True:
+                has_work = await self.tick()
+                if not has_work:
+                    break
+                # Yield to event loop to prevent starvation
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            # Gracefully halt the event loop following cascade cancellation
+            pass
         except Exception:
             # 7. State Dumps: In the event of an unhandled Python crash or fatal cryptographic tamper fault,
             # the Orchestrator MUST execute a final .model_dump_json() of the current EpistemicLedgerState
@@ -237,3 +259,7 @@ class CoreOrchestrator:
             sys.stdout.write(self.ledger.model_dump_json() + "\n")
             sys.stdout.flush()
             raise
+        finally:
+            # Prevent the listener from hanging around after natural loop completion
+            if not listener_task.done():
+                listener_task.cancel()

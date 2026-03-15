@@ -1,3 +1,6 @@
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 # Copyright (c) 2026 CoReason, Inc.
 #
 # This software is proprietary and dual-licensed.
@@ -7,9 +10,6 @@
 # Commercial use beyond a 30-day trial requires a separate license.
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
-
-from unittest.mock import AsyncMock
-
 import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
@@ -472,12 +472,83 @@ async def test_run_event_loop_exception(capsys: pytest.CaptureFixture[str]) -> N
         actuator_engine=actuator_engine,
     )
 
-    # Mock tick to raise
-    from unittest.mock import patch
-
     with (
         patch.object(orchestrator, "tick", new_callable=AsyncMock, side_effect=[True, ValueError("Tick failed")]),
-        pytest.raises(ExceptionGroup, match=r"unhandled errors|Tick failed"),
+        pytest.raises(Exception, match=r"Tick failed"),
+    ):
+        await orchestrator.run_event_loop()
+
+    # Verify that the state was dumped to stdout
+    captured = capsys.readouterr()
+    assert ledger.model_dump_json() in captured.out
+
+
+@pytest.mark.asyncio
+async def test_run_event_loop_preemption() -> None:
+    """Verifies that the event loop safely handles preemption and cascade cancellation."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    barge_in_event = BargeInInterruptEvent(
+        event_id="barge_in_1",
+        timestamp=1.0,
+        type="barge_in",
+        target_event_id="none",
+        sensory_trigger=None,
+        retained_partial_payload=None,
+        epistemic_disposition="retain_as_context",
+    )
+
+    # To trigger preemption, we will mock tick to just block (sleep) so the loop stays alive
+    # And we'll put an item in the queue.
+    async def mock_tick() -> bool:
+        await asyncio.sleep(0.1)
+        return True
+
+    orchestrator.tick = mock_tick  # type: ignore
+
+    orchestrator.interrupt_queue.put_nowait((barge_in_event, "active_tool_inv"))
+
+    # When we run the event loop, it should process the interrupt, cancel the tick, and gracefully exit
+    await asyncio.wait_for(orchestrator.run_event_loop(), timeout=2.0)
+
+    # Verify that preemption handled it correctly
+    assert len(orchestrator.ledger.history) == 1
+    terminal_event = orchestrator.ledger.history[0]
+    assert isinstance(terminal_event, BargeInInterruptEvent)
+    assert terminal_event.target_event_id == "active_tool_inv"
+    assert terminal_event.epistemic_disposition == "discard"
+
+
+@pytest.mark.asyncio
+async def test_run_event_loop_general_exception(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verifies event loop handles exceptions and dumps state for general exceptions."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    with (
+        patch.object(orchestrator, "tick", new_callable=AsyncMock, side_effect=ValueError("General exception")),
+        pytest.raises(Exception, match="General exception"),
     ):
         await orchestrator.run_event_loop()
 
