@@ -8,9 +8,11 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
+from typing import Any
+
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from coreason_orchestrator.factory import EventFactory
 from coreason_orchestrator.utils.crypto import calculate_event_hash
@@ -33,7 +35,7 @@ class MockNoEventIdEvent(BaseModel):
 
 
 class MockDefaultCoercionEvent(BaseModel):
-    event_id: str
+    event_id: str = Field(pattern=r"^[a-f0-9]{64}$")
     count: int
     status: str = "pending"
 
@@ -49,8 +51,8 @@ def test_event_factory_with_pre_existing_event_id() -> None:
     """Test that EventFactory generates event correctly even if event_id is pre-existing."""
     event = EventFactory.build_event(MockSimpleEvent, event_id="fake_id", data="test_data", count=42)
 
-    temp_event = MockSimpleEvent(event_id="0" * 64, data="test_data", count=42)
-    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+    dump = {"data": "test_data", "count": 42}
+    expected_hash = calculate_event_hash(dump)
     assert event.event_id == expected_hash
 
 
@@ -59,9 +61,8 @@ def test_event_factory_creates_event_with_hash() -> None:
     # Build event using factory
     event = EventFactory.build_event(MockSimpleEvent, data="test_data", count=42)
 
-    # Reconstruct what the temporary payload should have been
-    temp_event = MockSimpleEvent(event_id="0" * 64, data="test_data", count=42)
-    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+    dump = {"data": "test_data", "count": 42}
+    expected_hash = calculate_event_hash(dump)
 
     assert event.event_id == expected_hash
     assert event.data == "test_data"
@@ -74,12 +75,26 @@ def test_event_factory_with_defaults_and_coercion() -> None:
     event = EventFactory.build_event(MockDefaultCoercionEvent, count="42")  # type: ignore[arg-type]
 
     # The expected hash MUST be computed from the coerced and defaulted values
-    temp_event = MockDefaultCoercionEvent(event_id="0" * 64, count=42, status="pending")
-    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+    dump = {"count": 42, "status": "pending"}
+    expected_hash = calculate_event_hash(dump)
 
     assert event.event_id == expected_hash
     assert event.count == 42
     assert event.status == "pending"
+
+
+def test_event_factory_with_dynamic_model_construct_validation() -> None:
+    class MockStrictEvent(BaseModel):
+        event_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+        data: str
+        optional_val: str | None = None
+        default_factory_val: list[str] = Field(default_factory=list)
+
+    MockStrictEvent.model_rebuild()
+
+    event = EventFactory.build_event(MockStrictEvent, data="test_data", extra="yes")
+    expected_hash = calculate_event_hash({"data": "test_data", "optional_val": None, "default_factory_val": []})
+    assert event.event_id == expected_hash
 
 
 @given(  # type: ignore[misc]
@@ -108,8 +123,8 @@ def test_event_factory_with_complex_types(nested: dict[str, str | int], flags: l
     event = EventFactory.build_event(MockComplexEvent, nested=nested, flags=flags)
 
     # Reconstruct what the temporary payload should have been
-    temp_event = MockComplexEvent(event_id="0" * 64, nested=nested, flags=flags)
-    expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+    dump: dict[str, Any] = {"nested": nested, "flags": flags}
+    expected_hash = calculate_event_hash(dump)
 
     assert event.event_id == expected_hash
     assert event.nested == nested
