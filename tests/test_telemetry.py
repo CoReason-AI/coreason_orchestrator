@@ -12,8 +12,12 @@ from unittest.mock import AsyncMock, patch
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 import pytest
 from coreason_manifest.spec.ontology import (
+    BeliefMutationEvent,
     EpistemicLedgerState,
+    EpistemicProvenanceReceipt,
     GraphFlatteningPolicy,
+    SemanticEdgeState,
+    SemanticNodeState,
 )
 from hypothesis import given, settings
 from hypothesis.strategies import booleans, sampled_from
@@ -48,7 +52,30 @@ async def test_async_serialize_ledger_runs_in_thread() -> None:
 @pytest.mark.asyncio
 async def test_async_serialize_ledger_output() -> None:
     """Verifies the actual output of the async serialization wrapper matches the ledger dump."""
-    ledger = EpistemicLedgerState(history=[])
+    node = SemanticNodeState(
+        node_id="did:coreason:node:1",
+        label="TestNode",
+        text_chunk="Hello",
+        provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:agent1", source_event_id="e0"),
+    )
+    edge = SemanticEdgeState(
+        edge_id="did:coreason:edge:1",
+        subject_node_id="did:coreason:node:1",
+        object_node_id="did:coreason:node:2",
+        confidence_score=0.9,
+        predicate="knows",
+        provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:agent1", source_event_id="e0"),
+    )
+    event = BeliefMutationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="belief_mutation",
+        payload={
+            "n1": node.model_dump(),
+            "e1": edge.model_dump(),
+        },
+    )
+    ledger = EpistemicLedgerState(history=[event])
     policy = GraphFlatteningPolicy(
         node_projection_mode="wide_columnar",
         edge_projection_mode="adjacency_matrix",
@@ -60,7 +87,17 @@ async def test_async_serialize_ledger_output() -> None:
 
     parsed = json.loads(result)
     assert "history" in parsed
-    assert parsed["history"] == []
+    assert len(parsed["history"]) == 1
+    assert parsed["history"][0]["event_id"] == "e1"
+
+    assert "projected_nodes" in parsed
+    assert "did:coreason:node:1" in parsed["projected_nodes"]
+    assert parsed["projected_nodes"]["did:coreason:node:1"]["node_id"] == "did:coreason:node:1"
+
+    assert "projected_edges" in parsed
+    assert "did:coreason:node:1" in parsed["projected_edges"]
+    assert len(parsed["projected_edges"]["did:coreason:node:1"]) == 1
+    assert parsed["projected_edges"]["did:coreason:node:1"][0]["edge_id"] == "did:coreason:edge:1"
 
 
 @settings(max_examples=10)  # type: ignore
@@ -74,7 +111,40 @@ async def test_async_serialize_ledger_policy_application(
     node_mode: str, edge_mode: str, preserve_lineage: bool
 ) -> None:
     """Property-based testing to ensure varying policies are successfully processed."""
-    ledger = EpistemicLedgerState(history=[])
+    node = SemanticNodeState(
+        node_id="did:coreason:node:1",
+        label="TestNode",
+        text_chunk="Hello",
+        provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:agent1", source_event_id="e0"),
+    )
+    edge = SemanticEdgeState(
+        edge_id="did:coreason:edge:1",
+        subject_node_id="did:coreason:node:1",
+        object_node_id="did:coreason:node:2",
+        confidence_score=0.9,
+        predicate="knows",
+        provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:agent1", source_event_id="e0"),
+    )
+    event = BeliefMutationEvent(
+        event_id="e1",
+        timestamp=1.0,
+        type="belief_mutation",
+        payload={
+            "n1": node.model_dump(),
+            "e1": edge.model_dump(),
+            "invalid_node": {"node_id": "bad", "label": "missing_chunk"},
+            "invalid_edge": {"edge_id": "bad", "subject_node_id": "subj"},
+            "primitive": "just_a_string",
+            "exception_node": {"node_id": "bad2", "label": "bad2", "text_chunk": "bad2", "provenance": "invalid"},
+            "exception_edge": {
+                "edge_id": "bad3",
+                "subject_node_id": "subj",
+                "object_node_id": "obj",
+                "provenance": "invalid",
+            },
+        },
+    )
+    ledger = EpistemicLedgerState(history=[event])
     policy = GraphFlatteningPolicy(
         node_projection_mode=node_mode,  # type: ignore
         edge_projection_mode=edge_mode,  # type: ignore
@@ -85,3 +155,39 @@ async def test_async_serialize_ledger_policy_application(
     assert result != ""
     parsed = json.loads(result)
     assert "history" in parsed
+
+    if not preserve_lineage:
+        assert "event_id" not in parsed["history"][0]
+
+    # Check node projection
+    assert "projected_nodes" in parsed
+    if node_mode == "struct_array":
+        assert isinstance(parsed["projected_nodes"], list)
+        assert len(parsed["projected_nodes"]) == 1
+        if preserve_lineage:
+            assert parsed["projected_nodes"][0]["node_id"] == "did:coreason:node:1"
+        else:
+            assert "node_id" not in parsed["projected_nodes"][0]
+    else:
+        assert isinstance(parsed["projected_nodes"], dict)
+        # Even if preserve_lineage=False, the dict keys for wide_columnar might still be node_id
+        # (as per our implementation dict is {node.node_id: node_dump})
+        # but the node_id inside the payload should be stripped
+        assert "did:coreason:node:1" in parsed["projected_nodes"]
+        if not preserve_lineage:
+            assert "node_id" not in parsed["projected_nodes"]["did:coreason:node:1"]
+
+    # Check edge projection
+    assert "projected_edges" in parsed
+    if edge_mode == "map_array":
+        assert isinstance(parsed["projected_edges"], list)
+        assert len(parsed["projected_edges"]) == 1
+        if preserve_lineage:
+            assert parsed["projected_edges"][0]["edge_id"] == "did:coreason:edge:1"
+        else:
+            assert "edge_id" not in parsed["projected_edges"][0]
+    else:
+        assert isinstance(parsed["projected_edges"], dict)
+        assert "did:coreason:node:1" in parsed["projected_edges"]
+        if not preserve_lineage:
+            assert "edge_id" not in parsed["projected_edges"]["did:coreason:node:1"][0]
