@@ -86,7 +86,13 @@ class CoreOrchestrator:
             manifest: The associated ToolManifest defining the capability.
         """
         # 1. Compile a lightweight hydration manifest to prevent massive IPC serialization
-        max_tokens = getattr(self.workflow.topology, "max_fan_out", 5) * 1000  # Arbitrary limit based on topology
+        if self.ledger.eviction_policy is not None:
+            max_tokens = self.ledger.eviction_policy.max_retained_tokens
+        elif self.workflow.governance is not None and hasattr(self.workflow.governance, "max_budget_magnitude"):
+            max_tokens = getattr(self.workflow.governance, "max_budget_magnitude", 50000)
+        else:
+            max_tokens = 50000
+
         ledger_manifest = compile_state_hydration(
             ledger=self.ledger,
             coordinate=self.workflow.manifest_version,  # Using version as a safe fallback coordinate
@@ -147,11 +153,15 @@ class CoreOrchestrator:
             invocation_id: The CID of the ToolInvocationEvent or intent that caused the fault.
             burn_magnitude: The quantity of tokens to burn as a penalty.
         """
-        # We explicitly consume the penalized_node_id to map the penalty, but strictly through
-        # synthesizing a TokenBurnReceipt as requested by the ontology
-        # NOTE: TokenBurnReceipt natively maps to the invocation_id, which corresponds to the node.
-        # So we use penalized_node_id here implicitly.
-        _ = penalized_node_id
+        # Securely map the penalized node before synthesizing the TokenBurnReceipt
+        observation = EventFactory.build_event(
+            ObservationEvent,
+            type="observation",
+            timestamp=time.time(),
+            source_node_id=penalized_node_id,
+            payload={"burn_magnitude": burn_magnitude},
+        )
+        self.ledger = append_event(self.ledger, observation)
 
         burn_receipt = EventFactory.build_event(
             TokenBurnReceipt,

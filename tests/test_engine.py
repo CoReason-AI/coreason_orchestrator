@@ -189,11 +189,41 @@ async def test_delegate_to_kinetic_plane_success() -> None:
     call_args = actuator_engine.execute.call_args[0]
     assert call_args[0] == intent
     assert call_args[1] == manifest
-    assert call_args[2].max_retained_tokens == 5000  # workflow.topology.max_fan_out * 1000
+    assert call_args[2].max_retained_tokens == 50000  # Default when governance and eviction policy are absent
+
+    # Test dynamic max_retained_tokens overriding via EvictionPolicy
+    from coreason_manifest.spec.ontology import EvictionPolicy
+
+    orchestrator.ledger = orchestrator.ledger.model_copy(
+        update={"eviction_policy": EvictionPolicy(strategy="fifo", max_retained_tokens=10000, protected_event_ids=[])}
+    )
+    await orchestrator.delegate_to_kinetic_plane(intent, manifest)
+    call_args = actuator_engine.execute.call_args[0]
+    assert call_args[2].max_retained_tokens == 10000
+
+    # Test dynamic max_retained_tokens overriding via GovernancePolicy
+    from coreason_manifest.spec.ontology import ConstitutionalPolicy, GlobalGovernancePolicy
+
+    orchestrator.ledger = orchestrator.ledger.model_copy(update={"eviction_policy": None})
+    orchestrator.workflow = orchestrator.workflow.model_copy(
+        update={
+            "governance": GlobalGovernancePolicy(
+                mandatory_license_rule=ConstitutionalPolicy(
+                    rule_id="PPL_3_0_COMPLIANCE", description="License Check", severity="critical", forbidden_intents=[]
+                ),
+                max_budget_magnitude=8000,
+                max_global_tokens=1000,
+                global_timeout_seconds=100,
+            )
+        }
+    )
+    await orchestrator.delegate_to_kinetic_plane(intent, manifest)
+    call_args = actuator_engine.execute.call_args[0]
+    assert call_args[2].max_retained_tokens == 8000
 
     # Verify ledger was updated correctly
-    assert len(orchestrator.ledger.history) == 1
-    observation = orchestrator.ledger.history[0]
+    assert len(orchestrator.ledger.history) == 3
+    observation = orchestrator.ledger.history[-1]
 
     assert isinstance(observation, ObservationEvent)
     assert observation.type == "observation"
@@ -312,8 +342,13 @@ async def test_slash_byzantine_fault() -> None:
 
     orchestrator.slash_byzantine_fault("did:coreason:agent:evil_node", "bad_invocation_456", 500)
 
-    assert len(orchestrator.ledger.history) == 1
-    burn_receipt = orchestrator.ledger.history[0]
+    assert len(orchestrator.ledger.history) == 2
+    observation = orchestrator.ledger.history[0]
+    assert isinstance(observation, ObservationEvent)
+    assert observation.source_node_id == "did:coreason:agent:evil_node"
+    assert observation.payload["burn_magnitude"] == 500
+
+    burn_receipt = orchestrator.ledger.history[1]
 
     assert isinstance(burn_receipt, TokenBurnReceipt)
     assert burn_receipt.tool_invocation_id == "bad_invocation_456"
