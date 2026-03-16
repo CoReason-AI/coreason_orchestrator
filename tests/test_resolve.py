@@ -1,5 +1,7 @@
 from typing import Any
 
+import hypothesis.strategies as st
+
 # Copyright (c) 2026 CoReason, Inc.
 #
 # This software is proprietary and dual-licensed.
@@ -13,12 +15,14 @@ from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     CouncilTopologyManifest,
     DAGTopologyManifest,
+    EpistemicFlowStateReceipt,
     EpistemicLedgerState,
     EpistemicProvenanceReceipt,
     ObservationEvent,
     SystemNodeProfile,
     WorkflowManifest,
 )
+from hypothesis import given
 
 from coreason_orchestrator.resolve import resolve_current_node
 
@@ -40,6 +44,59 @@ def get_mock_workflow() -> WorkflowManifest:
         topology=topology,
         genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:node:a", source_event_id="dummy"),
     )
+
+
+def test_resolve_current_node_epistemic_flow_state_receipt() -> None:
+    """Verifies that an EpistemicFlowStateReceipt correctly completes a node and advances the frontier."""
+    workflow = get_mock_workflow()
+
+    event = EpistemicFlowStateReceipt(
+        event_id="e1",
+        timestamp=1.0,
+        type="epistemic_flow_state",
+        source_trajectory_id="did:coreason:node:a",
+        estimated_flow_value=1.0,
+        terminal_reward_factorized=True,
+    )
+    ledger = EpistemicLedgerState(history=[event])
+
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "B"
+
+
+@given(source_trajectory_id=st.from_regex(r"^did:[a-z0-9]+:[a-zA-Z0-9.\-_:]+$", fullmatch=True))  # type: ignore[misc]
+def test_resolve_current_node_epistemic_flow_state_receipt_hypothesis(source_trajectory_id: str) -> None:
+    """Verifies that EpistemicFlowStateReceipt correctly handles trajectory IDs with regex properties."""
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_b = AgentNodeProfile(description="B", architectural_intent=".", justification=".", type="agent")
+
+    topology = DAGTopologyManifest(
+        max_depth=5,
+        edges=[(source_trajectory_id, "did:coreason:node:b")],
+        nodes={source_trajectory_id: node_a, "did:coreason:node:b": node_b},
+        max_fan_out=5,
+    )
+
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        topology=topology,
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+    )
+
+    event = EpistemicFlowStateReceipt(
+        event_id="e1",
+        timestamp=1.0,
+        type="epistemic_flow_state",
+        source_trajectory_id=source_trajectory_id,
+        estimated_flow_value=1.0,
+        terminal_reward_factorized=True,
+    )
+    ledger = EpistemicLedgerState(history=[event])
+
+    frontier = resolve_current_node(workflow, ledger)
+    assert len(frontier) == 1
+    assert frontier[0].description == "B"
 
 
 def test_resolve_current_node_no_routing_manifest() -> None:
