@@ -9,11 +9,47 @@
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
 import asyncio
+import contextlib
+import json
+from typing import Any
 
 from coreason_manifest.spec.ontology import (
+    BeliefMutationEvent,
     EpistemicLedgerState,
     GraphFlatteningPolicy,
+    SemanticEdgeState,
+    SemanticNodeState,
 )
+
+
+def _extract_nodes_edges(ledger: EpistemicLedgerState) -> tuple[list[SemanticNodeState], list[SemanticEdgeState]]:
+    nodes: list[SemanticNodeState] = []
+    edges: list[SemanticEdgeState] = []
+
+    for event in ledger.history:
+        if isinstance(event, BeliefMutationEvent):
+            for value in event.payload.values():
+                if isinstance(value, dict):
+                    # Rough heuristic for semantic objects
+                    if value.get("node_id") and value.get("label") and value.get("text_chunk"):
+                        with contextlib.suppress(Exception):
+                            nodes.append(SemanticNodeState.model_validate(value))
+                    elif value.get("edge_id") and value.get("subject_node_id") and value.get("object_node_id"):
+                        with contextlib.suppress(Exception):
+                            edges.append(SemanticEdgeState.model_validate(value))
+    return nodes, edges
+
+
+def _strip_lineage(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {
+            k: _strip_lineage(v)
+            for k, v in obj.items()
+            if k not in ("event_id", "diff_id", "node_id", "edge_id", "checkpoint_id")
+        }
+    if isinstance(obj, list):
+        return [_strip_lineage(item) for item in obj]
+    return obj
 
 
 def _serialize_ledger_sync(ledger: EpistemicLedgerState, policy: GraphFlatteningPolicy) -> str:
@@ -21,17 +57,43 @@ def _serialize_ledger_sync(ledger: EpistemicLedgerState, policy: GraphFlattening
     Synchronously serializes the massive EpistemicLedgerState based on the GraphFlatteningPolicy.
     This function is computationally expensive and MUST run inside a separate thread.
     """
-    # Simply mapping the policy into the final dumped model, or custom projection
-    # For now, adhering strictly to dumping logic and ensuring policy is evaluated.
+    # Create the full base dump preserving all fields like active_rollbacks, etc.
+    base_dump = ledger.model_dump(mode="json")
 
-    # We parse the GraphFlatteningPolicy variables to simulate policy enforcement
-    _ = policy.node_projection_mode
-    _ = policy.edge_projection_mode
-    _ = policy.preserve_cryptographic_lineage
+    # 1. Strip cryptographic lineage if mandated
+    if not policy.preserve_cryptographic_lineage:
+        base_dump = _strip_lineage(base_dump)
 
-    # Serialize massive ledger deterministically via model_dump_json
-    # Returning string to be emitted by telemetry
-    return str(ledger.model_dump_json())
+    # 2. Extract and project Semantic Nodes and Edges
+    nodes, edges = _extract_nodes_edges(ledger)
+
+    if policy.node_projection_mode == "struct_array":
+        nodes_dump = [node.model_dump() for node in nodes]
+        base_dump["projected_nodes"] = (
+            _strip_lineage(nodes_dump) if not policy.preserve_cryptographic_lineage else nodes_dump
+        )
+    elif policy.node_projection_mode == "wide_columnar":
+        nodes_dump_dict = {node.node_id: node.model_dump() for node in nodes}
+        base_dump["projected_nodes"] = (
+            _strip_lineage(nodes_dump_dict) if not policy.preserve_cryptographic_lineage else nodes_dump_dict
+        )
+
+    if policy.edge_projection_mode == "map_array":
+        edges_dump = [edge.model_dump() for edge in edges]
+        base_dump["projected_edges"] = (
+            _strip_lineage(edges_dump) if not policy.preserve_cryptographic_lineage else edges_dump
+        )
+    elif policy.edge_projection_mode == "adjacency_matrix":
+        adj: dict[str, list[dict[str, Any]]] = {}
+        for edge in edges:
+            subj = edge.subject_node_id
+            if subj not in adj:
+                adj[subj] = []
+            adj[subj].append(edge.model_dump())
+        base_dump["projected_edges"] = _strip_lineage(adj) if not policy.preserve_cryptographic_lineage else adj
+
+    # 3. Serialize massive ledger deterministically via json.dumps
+    return json.dumps(base_dump)
 
 
 async def async_serialize_ledger(ledger: EpistemicLedgerState, policy: GraphFlatteningPolicy) -> str:
