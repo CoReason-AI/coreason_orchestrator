@@ -39,13 +39,15 @@ class EventFactory:
         # Identify the ID field: usually 'event_id', but 'diff_id' for StateDifferentialManifest
         id_field = "diff_id" if "diff_id" in event_class.model_fields else "event_id"
 
-        # If the class has the ID field, inject a temporary one to satisfy Pydantic
-        # so that we can instantiate a temporary model.
+        # If the class has the ID field, inject a valid temporary one to satisfy Pydantic
+        # strict regexes (e.g., W3C DIDs, SHA-256 hashes) without breaking model_config
+        # and serializers, so that we can instantiate the model natively to enforce defaults.
         temp_kwargs = dict(kwargs)
         if id_field in event_class.model_fields:
-            temp_kwargs[id_field] = ""
+            # We inject a 64-character hash pattern that satisfies standard cryptographic CID constraints
+            temp_kwargs[id_field] = "0" * 64
 
-        # Instantiate a temporary model to ensure Pydantic applies defaults and type coercion
+        # Instantiate the native model to ensure Pydantic applies defaults, coercion, and custom validation
         temp_event = event_class(**temp_kwargs)
 
         # Calculate the deterministic hash from the fully validated output (excluding the ID field)
