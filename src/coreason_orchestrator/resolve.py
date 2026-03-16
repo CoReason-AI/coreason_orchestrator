@@ -11,6 +11,7 @@
 from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     DAGTopologyManifest,
+    EpistemicFlowStateReceipt,
     EpistemicLedgerState,
     ObservationEvent,
     WorkflowManifest,
@@ -75,7 +76,10 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
     has_routing_manifest = False
 
     for event in ledger.history:
-        if isinstance(event, ObservationEvent):
+        if isinstance(event, EpistemicFlowStateReceipt):
+            if event.source_trajectory_id:
+                completed_nodes.add(event.source_trajectory_id)
+        elif isinstance(event, ObservationEvent):
             if event.source_node_id:
                 # We might consider ObservationEvent as a state event that implies execution happened on the node
                 completed_nodes.add(event.source_node_id)
