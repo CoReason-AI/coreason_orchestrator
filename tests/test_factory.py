@@ -49,7 +49,7 @@ def test_event_factory_with_pre_existing_event_id() -> None:
     """Test that EventFactory generates event correctly even if event_id is pre-existing."""
     event = EventFactory.build_event(MockSimpleEvent, event_id="fake_id", data="test_data", count=42)
 
-    temp_event = MockSimpleEvent(event_id="", data="test_data", count=42)
+    temp_event = MockSimpleEvent(event_id="0" * 64, data="test_data", count=42)
     expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
     assert event.event_id == expected_hash
 
@@ -60,7 +60,7 @@ def test_event_factory_creates_event_with_hash() -> None:
     event = EventFactory.build_event(MockSimpleEvent, data="test_data", count=42)
 
     # Reconstruct what the temporary payload should have been
-    temp_event = MockSimpleEvent(event_id="", data="test_data", count=42)
+    temp_event = MockSimpleEvent(event_id="0" * 64, data="test_data", count=42)
     expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
 
     assert event.event_id == expected_hash
@@ -74,7 +74,7 @@ def test_event_factory_with_defaults_and_coercion() -> None:
     event = EventFactory.build_event(MockDefaultCoercionEvent, count="42")  # type: ignore[arg-type]
 
     # The expected hash MUST be computed from the coerced and defaulted values
-    temp_event = MockDefaultCoercionEvent(event_id="", count=42, status="pending")
+    temp_event = MockDefaultCoercionEvent(event_id="0" * 64, count=42, status="pending")
     expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
 
     assert event.event_id == expected_hash
@@ -108,7 +108,7 @@ def test_event_factory_with_complex_types(nested: dict[str, str | int], flags: l
     event = EventFactory.build_event(MockComplexEvent, nested=nested, flags=flags)
 
     # Reconstruct what the temporary payload should have been
-    temp_event = MockComplexEvent(event_id="", nested=nested, flags=flags)
+    temp_event = MockComplexEvent(event_id="0" * 64, nested=nested, flags=flags)
     expected_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
 
     assert event.event_id == expected_hash
