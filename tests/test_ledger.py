@@ -15,6 +15,7 @@ from coreason_manifest.spec.ontology import (
     EpistemicLedgerState,
     ObservationEvent,
     RollbackIntent,
+    StateDifferentialManifest,
     SystemFaultEvent,
 )
 from hypothesis import given, settings
@@ -101,7 +102,7 @@ def test_append_event_hypothesis(payload: dict[str, Any]) -> None:
 
 
 def test_apply_rollback_basic() -> None:
-    """Verifies applying a rollback updates the arrays without mutating the original ledger."""
+    """Verifies applying a rollback synthesizes a StateDifferentialManifest."""
     ledger = EpistemicLedgerState(history=[])
 
     rollback = RollbackIntent(
@@ -117,31 +118,36 @@ def test_apply_rollback_basic() -> None:
         quarantined_event_ids=["evt1", "evt2"],
     )
 
-    new_ledger = apply_rollback(ledger, rollback, cascade)
+    manifest = apply_rollback(ledger, rollback, cascade)
 
     # Verify original ledger is not mutated
     assert ledger.active_rollbacks == []
     assert ledger.active_cascades == []
 
-    # Verify new ledger has the correct items appended
-    assert new_ledger.active_rollbacks is not None
-    assert len(new_ledger.active_rollbacks) == 1
-    assert new_ledger.active_rollbacks[0].request_id == "req1"
+    # Verify it returns a StateDifferentialManifest
+    assert isinstance(manifest, StateDifferentialManifest)
+    assert manifest.author_node_id == "did:coreason:orchestrator"
+    assert manifest.lamport_timestamp == 0
+    assert manifest.diff_id != "placeholder"
 
-    assert new_ledger.active_cascades is not None
-    assert len(new_ledger.active_cascades) == 1
-    assert new_ledger.active_cascades[0].cascade_id == "cascade1"
+    # Verify the patches
+    assert len(manifest.patches) == 2
 
-    # Verify deep copy was used (modifying the original intent should not affect the ledger)
-    rollback.invalidated_node_ids.append("node3")
-    assert "node3" not in new_ledger.active_rollbacks[0].invalidated_node_ids
+    # Rollback patch
+    rollback_patch = manifest.patches[0]
+    assert rollback_patch.op == "add"
+    assert rollback_patch.path == "/active_rollbacks/-"
+    assert rollback_patch.value == rollback.model_dump()
 
-    cascade.quarantined_event_ids.append("evt3")
-    assert "evt3" not in new_ledger.active_cascades[0].quarantined_event_ids
+    # Cascade patch
+    cascade_patch = manifest.patches[1]
+    assert cascade_patch.op == "add"
+    assert cascade_patch.path == "/active_cascades/-"
+    assert cascade_patch.value == cascade.model_dump()
 
 
 def test_apply_rollback_existing_elements() -> None:
-    """Verifies appending works when there are already existing rollbacks and cascades."""
+    """Verifies synthesizing works regardless of existing rollbacks and cascades."""
     ledger = EpistemicLedgerState(
         history=[],
         active_rollbacks=[
@@ -170,19 +176,20 @@ def test_apply_rollback_existing_elements() -> None:
         quarantined_event_ids=["evt_new"],
     )
 
-    new_ledger = apply_rollback(ledger, rollback, cascade)
+    manifest = apply_rollback(ledger, rollback, cascade)
 
-    assert new_ledger.active_rollbacks is not None
-    assert len(new_ledger.active_rollbacks) == 2
-    assert new_ledger.active_rollbacks[1].request_id == "req_new"
+    assert isinstance(manifest, StateDifferentialManifest)
+    assert len(manifest.patches) == 2
 
-    assert new_ledger.active_cascades is not None
-    assert len(new_ledger.active_cascades) == 2
-    assert new_ledger.active_cascades[1].cascade_id == "cas_new"
+    # Verify that the patches target the ends of the arrays
+    assert manifest.patches[0].path == "/active_rollbacks/-"
+    assert manifest.patches[1].path == "/active_cascades/-"
 
     # Ensure original ledger unmodified
     assert ledger.active_rollbacks is not None
     assert len(ledger.active_rollbacks) == 1
+    assert ledger.active_cascades is not None
+    assert len(ledger.active_cascades) == 1
 
 
 @given(  # type: ignore[misc]
@@ -204,7 +211,7 @@ def test_apply_rollback_hypothesis(
     propagated_decay_factor: float,
     quarantined_event_ids: list[str],
 ) -> None:
-    """Uses hypothesis to verify apply_rollback works with varied structural configurations."""
+    """Uses hypothesis to verify apply_rollback creates valid StateDifferentialManifests."""
     ledger = EpistemicLedgerState(history=[])
 
     rollback = RollbackIntent(
@@ -220,15 +227,12 @@ def test_apply_rollback_hypothesis(
         quarantined_event_ids=quarantined_event_ids,
     )
 
-    new_ledger = apply_rollback(ledger, rollback, cascade)
+    manifest = apply_rollback(ledger, rollback, cascade)
 
-    assert new_ledger.active_rollbacks is not None
-    assert len(new_ledger.active_rollbacks) == 1
-    assert new_ledger.active_rollbacks[0].request_id == request_id
-
-    assert new_ledger.active_cascades is not None
-    assert len(new_ledger.active_cascades) == 1
-    assert new_ledger.active_cascades[0].cascade_id == cascade_id
+    assert isinstance(manifest, StateDifferentialManifest)
+    assert len(manifest.patches) == 2
+    assert manifest.patches[0].value == rollback.model_dump()
+    assert manifest.patches[1].value == cascade.model_dump()
 
     # Original remains untouched
     assert ledger.active_rollbacks == []

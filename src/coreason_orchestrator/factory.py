@@ -36,22 +36,25 @@ class EventFactory:
         Returns:
             A strictly instantiated event with a mathematically bound event_id.
         """
-        # If the class has an event_id field, inject a temporary one to satisfy Pydantic
+        # Identify the ID field: usually 'event_id', but 'diff_id' for StateDifferentialManifest
+        id_field = "diff_id" if "diff_id" in event_class.model_fields else "event_id"
+
+        # If the class has the ID field, inject a temporary one to satisfy Pydantic
         # so that we can instantiate a temporary model.
         temp_kwargs = dict(kwargs)
-        if "event_id" in event_class.model_fields:
-            temp_kwargs["event_id"] = ""
+        if id_field in event_class.model_fields:
+            temp_kwargs[id_field] = ""
 
         # Instantiate a temporary model to ensure Pydantic applies defaults and type coercion
         temp_event = event_class(**temp_kwargs)
 
-        # Calculate the deterministic hash from the fully validated output (excluding event_id)
-        event_hash = calculate_event_hash(temp_event.model_dump(exclude={"event_id"}))
+        # Calculate the deterministic hash from the fully validated output (excluding the ID field)
+        event_hash = calculate_event_hash(temp_event.model_dump(exclude={id_field}))
 
         final_kwargs = dict(kwargs)
 
-        # Inject the true event_id only if the class actually supports it
-        if "event_id" in event_class.model_fields:
-            final_kwargs["event_id"] = event_hash
+        # Inject the true ID only if the class actually supports it
+        if id_field in event_class.model_fields:
+            final_kwargs[id_field] = event_hash
 
         return event_class(**final_kwargs)
