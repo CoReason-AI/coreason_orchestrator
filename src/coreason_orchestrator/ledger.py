@@ -8,13 +8,14 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
-import copy
 from typing import Any
 
 from coreason_manifest.spec.ontology import (
     DefeasibleCascadeEvent,
     EpistemicLedgerState,
     RollbackIntent,
+    StateDifferentialManifest,
+    StateMutationIntent,
 )
 
 from coreason_orchestrator.factory import EventFactory
@@ -52,13 +53,15 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
 
 def apply_rollback(
     ledger: EpistemicLedgerState, rollback: RollbackIntent, cascade: DefeasibleCascadeEvent
-) -> EpistemicLedgerState:
+) -> StateDifferentialManifest:
     """
-    Applies a topological rollback by appending the corresponding RollbackIntent
-    and DefeasibleCascadeEvent strictly adhering to Anti-CRUD philosophies.
+    Applies a topological rollback by synthesizing a StateDifferentialManifest
+    strictly adhering to Anti-CRUD philosophies and preventing O(N^2) memory
+    allocations from deep-copying immutable ledger arrays in-place.
 
-    This mathematically isolates falsified branches by recording the invalidation rather
-    than mutating historical arrays in-place.
+    This mathematically isolates falsified branches by recording the invalidation
+    as a deterministically bound state differential rather than mutating historical
+    arrays or forcing a full EpistemicLedgerState re-instantiation.
 
     Args:
         ledger: The current crystallized EpistemicLedgerState.
@@ -66,22 +69,22 @@ def apply_rollback(
         cascade: The calculated state differential payload muting specific subgraphs.
 
     Returns:
-        A completely synthesized new instance of EpistemicLedgerState containing the update.
+        A synthesized StateDifferentialManifest representing the exact state mutation.
     """
-    # We must synthesize completely new state arrays instead of appending in-place
-    # active_rollbacks and active_cascades may be None based on default pydantic values if optional
-    current_rollbacks = ledger.active_rollbacks if ledger.active_rollbacks is not None else []
-    current_cascades = ledger.active_cascades if ledger.active_cascades is not None else []
+    _ = ledger  # Ledger parameter kept for API signature compatibility, but unused to prevent N^2 copying
 
-    new_active_rollbacks = list(current_rollbacks)
-    new_active_rollbacks.append(copy.deepcopy(rollback))
+    # Prevent O(N^2) memory allocations by creating a StateDifferentialManifest
+    # with the appropriate JSON patches instead of copying the whole array.
+    patches = [
+        StateMutationIntent(op="add", path="/active_rollbacks/-", value=rollback.model_dump()),
+        StateMutationIntent(op="add", path="/active_cascades/-", value=cascade.model_dump()),
+    ]
 
-    new_active_cascades = list(current_cascades)
-    new_active_cascades.append(copy.deepcopy(cascade))
-
-    return ledger.model_copy(
-        update={
-            "active_rollbacks": new_active_rollbacks,
-            "active_cascades": new_active_cascades,
-        }
+    return EventFactory.build_event(
+        StateDifferentialManifest,
+        diff_id="placeholder",  # Will be replaced by EventFactory computing the true hash
+        author_node_id="did:coreason:orchestrator",
+        lamport_timestamp=0,
+        vector_clock={},
+        patches=patches,
     )
