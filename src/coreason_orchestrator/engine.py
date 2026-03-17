@@ -47,7 +47,11 @@ class CoreOrchestrator:
     ) -> None:
         self.workflow = workflow
         # Dynamically unroll Zero-Cost Macros into executable Base Topologies
-        if hasattr(self.workflow.topology, "compile_to_base_topology"):
+        if (
+            self.workflow
+            and hasattr(self.workflow, "topology")
+            and hasattr(self.workflow.topology, "compile_to_base_topology")
+        ):
             self.workflow = self.workflow.model_copy(
                 update={"topology": self.workflow.topology.compile_to_base_topology()}
             )
@@ -57,6 +61,33 @@ class CoreOrchestrator:
         self.action_space_registry = action_space_registry or {}
         self._ledger_lock = asyncio.Lock()
         self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
+
+    async def inject_observation(self, user_input: str) -> None:
+        """Injects an interactive user observation directly into the ledger."""
+        import time
+
+        from coreason_manifest.spec.ontology import ObservationEvent
+
+        from coreason_orchestrator.factory import EventFactory
+
+        # Synthesize a valid ObservationEvent from the human's input
+        obs = EventFactory.build_event(
+            ObservationEvent,
+            timestamp=time.time(),
+            type="observation",
+            payload={"user_input": user_input},
+        )
+
+        # Securely append to the immutable ledger
+        async with self._ledger_lock:
+            self.ledger = append_event(self.ledger, obs)
+
+    def dump_partial_state(self) -> EpistemicLedgerState:
+        """
+        Disaster Recovery: Returns the current crystallized state of the ledger
+        following an execution collapse.
+        """
+        return self.ledger
 
     async def delegate_to_cognitive_plane(
         self, node: AgentNodeProfile, node_id: str, action_space: ActionSpaceManifest

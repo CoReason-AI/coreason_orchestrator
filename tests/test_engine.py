@@ -781,3 +781,53 @@ def test_engine_zero_cost_macro() -> None:
 
     orchestrator = CoreOrchestrator(workflow, None, None, None)  # type: ignore[arg-type]
     assert orchestrator.workflow.topology == base_topology
+
+
+@pytest.mark.asyncio
+async def test_inject_observation() -> None:
+    """Verifies inject_observation properly synthensizes and appends to the ledger."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=AsyncMock(),
+        actuator_engine=AsyncMock(),
+    )
+
+    await orchestrator.inject_observation("Test human message")
+
+    assert len(orchestrator.ledger.history) == 1
+    assert isinstance(orchestrator.ledger.history[0], ObservationEvent)
+    assert orchestrator.ledger.history[0].payload == {"user_input": "Test human message"}
+
+
+def test_dump_partial_state() -> None:
+    """Verifies dump_partial_state returns the current ledger state."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=AsyncMock(),
+        actuator_engine=AsyncMock(),
+    )
+
+    result = orchestrator.dump_partial_state()
+    assert result is ledger
+
+
+def test_init_without_workflow() -> None:
+    """Verifies orchestrator can instantiate without a workflow (None)."""
+    ledger = EpistemicLedgerState(history=[])
+
+    orchestrator = CoreOrchestrator(
+        workflow=None,  # type: ignore[arg-type]
+        ledger=ledger,
+        inference_engine=AsyncMock(),
+        actuator_engine=AsyncMock(),
+    )
+
+    assert orchestrator.workflow is None
