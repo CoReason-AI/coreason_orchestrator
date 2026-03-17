@@ -1,10 +1,10 @@
-from coreason_manifest.spec.ontology import ObservationEvent, DynamicRoutingManifest
+from coreason_manifest.spec.ontology import DynamicRoutingManifest, ObservationEvent
 from pydantic.fields import FieldInfo
 
 ObservationEvent.model_fields["embedded_routing_manifest"] = FieldInfo(
     annotation=DynamicRoutingManifest | None,
     default=None,
-    description="An explicit, discriminated field for conditional routing."
+    description="An explicit, discriminated field for conditional routing.",
 )
 ObservationEvent.model_rebuild(force=True)
 
