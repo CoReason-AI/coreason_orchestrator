@@ -125,3 +125,28 @@ def test_logger_coverage_mkdir(tmp_path: Path, monkeypatch: Any) -> None:
         import coreason_orchestrator.utils.logger  # noqa: F401
 
     assert test_logs_dir.exists()
+
+
+def test_serialize_to_log_event() -> None:
+    """Verifies that the custom loguru serializer correctly formats LogEvent."""
+    import json
+    from unittest.mock import MagicMock
+
+    from coreason_orchestrator.utils.logger import _serialize_to_log_event
+
+    mock_message = MagicMock()
+    mock_message.record = {
+        "level": type("Level", (), {"name": "ERROR"})(),
+        "message": "test error message",
+        "extra": {"trace_id": "123"},
+    }
+
+    result = _serialize_to_log_event(mock_message)
+
+    assert isinstance(result, str)
+    assert result.endswith("\n")
+
+    parsed = json.loads(result)
+    assert parsed["level"] == "ERROR"
+    assert parsed["message"] == "test error message"
+    assert parsed["context_profile"] == {"trace_id": "123"}
