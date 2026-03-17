@@ -115,23 +115,51 @@ def test_resolve_current_node_with_valid_bypassed_steps() -> None:
     workflow = get_mock_workflow()
 
     # Payload simulates bypassing node A, advancing to node B
-    routing_manifest = DynamicRoutingManifest.model_construct(
-        manifest_id="dummy",
-        branch_budgets_magnitude={},
-        artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
-        active_subgraphs={},
-        bypassed_steps=[type("BypassReceipt", (), {"bypassed_node_id": "did:coreason:node:a"})()],  # type: ignore[list-item]
-    )
+    routing_manifest = {
+        "manifest_id": "dummy",
+        "branch_budgets_magnitude": {},
+        "artifact_profile": {"detected_modalities": ["group1"], "artifact_event_id": "d"},
+        "active_subgraphs": {},
+        "bypassed_steps": [{"bypassed_node_id": "did:coreason:node:a"}],
+    }
 
     event_dict: dict[str, Any] = {
         "event_id": "e1",
         "timestamp": 1.0,
         "type": "observation",
-        "payload": {},
-        "embedded_routing_manifest": routing_manifest,
+        "payload": {"embedded_routing_manifest": routing_manifest},
     }
     event = ObservationEvent.model_construct(**event_dict)
-    ledger = EpistemicLedgerState(history=[event])
+
+    # For coverage on the continue clause in type error
+    event2_dict: dict[str, Any] = {
+        "event_id": "e2",
+        "timestamp": 1.0,
+        "type": "observation",
+        "payload": {"embedded_routing_manifest": []},
+    }
+    event2 = ObservationEvent.model_construct(**event2_dict)
+
+    # For coverage on the else clause in dict
+    event3_dict: dict[str, Any] = {
+        "event_id": "e3",
+        "timestamp": 1.0,
+        "type": "observation",
+        "payload": {
+            "embedded_routing_manifest": DynamicRoutingManifest.model_construct(
+                manifest_id="dummy",
+                branch_budgets_magnitude={},
+                active_subgraphs={},
+                bypassed_steps=[type("BypassReceipt", (), {"bypassed_node_id": "did:coreason:node:a"})()],  # type: ignore[list-item]
+                artifact_profile=type(
+                    "ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"}
+                )(),
+            )
+        },
+    }
+    event3 = ObservationEvent.model_construct(**event3_dict)
+
+    ledger = EpistemicLedgerState(history=[event, event2, event3])
 
     frontier = resolve_current_node(workflow, ledger)
     assert len(frontier) == 1
@@ -143,20 +171,19 @@ def test_resolve_current_node_with_invalid_bypassed_steps() -> None:
     workflow = get_mock_workflow()
 
     # Payload simulates an empty bypassing steps natively
-    routing_manifest = DynamicRoutingManifest.model_construct(
-        manifest_id="dummy",
-        branch_budgets_magnitude={},
-        active_subgraphs={},
-        bypassed_steps=[],
-        artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
-    )
+    routing_manifest = {
+        "manifest_id": "dummy",
+        "branch_budgets_magnitude": {},
+        "active_subgraphs": {},
+        "bypassed_steps": [],
+        "artifact_profile": {"detected_modalities": ["group1"], "artifact_event_id": "d"},
+    }
 
     event_dict: dict[str, Any] = {
         "event_id": "e1",
         "timestamp": 1.0,
         "type": "observation",
-        "payload": {},
-        "embedded_routing_manifest": routing_manifest,
+        "payload": {"embedded_routing_manifest": routing_manifest},
     }
     event = ObservationEvent.model_construct(**event_dict)
 
@@ -185,20 +212,19 @@ def test_resolve_current_node_with_valid_active_subgraphs() -> None:
         topology=topology,
     )
 
-    routing_manifest = DynamicRoutingManifest.model_construct(
-        manifest_id="dummy",
-        branch_budgets_magnitude={},
-        bypassed_steps=[],
-        artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
-        active_subgraphs={"group1": ["did:coreason:node:b2"]},
-    )
+    routing_manifest = {
+        "manifest_id": "dummy",
+        "branch_budgets_magnitude": {},
+        "bypassed_steps": [],
+        "artifact_profile": {"detected_modalities": ["group1"], "artifact_event_id": "d"},
+        "active_subgraphs": {"group1": ["did:coreason:node:b2"]},
+    }
     event_dict: dict[str, Any] = {
         "event_id": "e1",
         "timestamp": 1.0,
         "type": "observation",
         "source_node_id": "did:coreason:node:a",
-        "payload": {},
-        "embedded_routing_manifest": routing_manifest,
+        "payload": {"embedded_routing_manifest": routing_manifest},
     }
     event = ObservationEvent.model_construct(**event_dict)
 
@@ -227,20 +253,19 @@ def test_resolve_current_node_with_invalid_active_subgraphs() -> None:
         topology=topology,
     )
 
-    routing_manifest = DynamicRoutingManifest.model_construct(
-        manifest_id="dummy",
-        branch_budgets_magnitude={},
-        bypassed_steps=[],
-        artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
-        active_subgraphs={"group1": ["did:coreason:node:b1"]},
-    )
+    routing_manifest = {
+        "manifest_id": "dummy",
+        "branch_budgets_magnitude": {},
+        "bypassed_steps": [],
+        "artifact_profile": {"detected_modalities": ["group1"], "artifact_event_id": "d"},
+        "active_subgraphs": {"group1": ["did:coreason:node:b1"]},
+    }
     event_dict: dict[str, Any] = {
         "event_id": "e1",
         "timestamp": 1.0,
         "type": "observation",
         "source_node_id": "did:coreason:node:a",
-        "payload": {},
-        "embedded_routing_manifest": routing_manifest,
+        "payload": {"embedded_routing_manifest": routing_manifest},
     }
     event = ObservationEvent.model_construct(**event_dict)
 
