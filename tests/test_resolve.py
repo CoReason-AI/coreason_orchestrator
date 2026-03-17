@@ -1,3 +1,5 @@
+from typing import Any
+
 import hypothesis.strategies as st
 
 # Copyright (c) 2026 CoReason, Inc.
@@ -120,13 +122,15 @@ def test_resolve_current_node_with_valid_bypassed_steps() -> None:
         active_subgraphs={},
         bypassed_steps=[type("BypassReceipt", (), {"bypassed_node_id": "did:coreason:node:a"})()],  # type: ignore[list-item]
     )
-    event = ObservationEvent.model_construct(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={},  # type: ignore[arg-type]
-        embedded_routing_manifest=routing_manifest,
-    )
+
+    event_dict: dict[str, Any] = {
+        "event_id": "e1",
+        "timestamp": 1.0,
+        "type": "observation",
+        "payload": {},
+        "embedded_routing_manifest": routing_manifest,
+    }
+    event = ObservationEvent.model_construct(**event_dict)
     ledger = EpistemicLedgerState(history=[event])
 
     frontier = resolve_current_node(workflow, ledger)
@@ -146,13 +150,16 @@ def test_resolve_current_node_with_invalid_bypassed_steps() -> None:
         bypassed_steps=[],
         artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
     )
-    event = ObservationEvent.model_construct(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        payload={},  # type: ignore[arg-type]
-        embedded_routing_manifest=routing_manifest,
-    )
+
+    event_dict: dict[str, Any] = {
+        "event_id": "e1",
+        "timestamp": 1.0,
+        "type": "observation",
+        "payload": {},
+        "embedded_routing_manifest": routing_manifest,
+    }
+    event = ObservationEvent.model_construct(**event_dict)
+
     ledger = EpistemicLedgerState(history=[event])
 
     frontier = resolve_current_node(workflow, ledger)
@@ -178,8 +185,6 @@ def test_resolve_current_node_with_valid_active_subgraphs() -> None:
         topology=topology,
     )
 
-    # Node A is completed (via standard observation source mapping)
-    # AND active_subgraphs restricts the next steps to ONLY B2
     routing_manifest = DynamicRoutingManifest.model_construct(
         manifest_id="dummy",
         branch_budgets_magnitude={},
@@ -187,14 +192,16 @@ def test_resolve_current_node_with_valid_active_subgraphs() -> None:
         artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
         active_subgraphs={"group1": ["did:coreason:node:b2"]},
     )
-    event = ObservationEvent.model_construct(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        source_node_id="did:coreason:node:a",
-        payload={},  # type: ignore[arg-type]
-        embedded_routing_manifest=routing_manifest,
-    )
+    event_dict: dict[str, Any] = {
+        "event_id": "e1",
+        "timestamp": 1.0,
+        "type": "observation",
+        "source_node_id": "did:coreason:node:a",
+        "payload": {},
+        "embedded_routing_manifest": routing_manifest,
+    }
+    event = ObservationEvent.model_construct(**event_dict)
+
     ledger = EpistemicLedgerState(history=[event])
 
     frontier = resolve_current_node(workflow, ledger)
@@ -220,10 +227,6 @@ def test_resolve_current_node_with_invalid_active_subgraphs() -> None:
         topology=topology,
     )
 
-    # This test used to check if ducks were typed properly on the payload,
-    # now we just verify Pydantic's natural validation would handle it,
-    # but since we instantiate dynamically for mock we provide a somewhat "invalid" structure
-    # to test graceful iteration in the resolve logic natively.
     routing_manifest = DynamicRoutingManifest.model_construct(
         manifest_id="dummy",
         branch_budgets_magnitude={},
@@ -231,19 +234,19 @@ def test_resolve_current_node_with_invalid_active_subgraphs() -> None:
         artifact_profile=type("ArtifactProfile", (), {"detected_modalities": ["group1"], "artifact_event_id": "d"})(),
         active_subgraphs={"group1": ["did:coreason:node:b1"]},
     )
-    event = ObservationEvent.model_construct(
-        event_id="e1",
-        timestamp=1.0,
-        type="observation",
-        source_node_id="did:coreason:node:a",
-        payload={},  # type: ignore[arg-type]
-        embedded_routing_manifest=routing_manifest,
-    )
+    event_dict: dict[str, Any] = {
+        "event_id": "e1",
+        "timestamp": 1.0,
+        "type": "observation",
+        "source_node_id": "did:coreason:node:a",
+        "payload": {},
+        "embedded_routing_manifest": routing_manifest,
+    }
+    event = ObservationEvent.model_construct(**event_dict)
+
     ledger = EpistemicLedgerState(history=[event])
 
     frontier = resolve_current_node(workflow, ledger)
-
-    # Now the native model gives us structured data
     assert len(frontier) == 1
     assert frontier[0].description == "B1"
 
