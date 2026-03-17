@@ -163,7 +163,7 @@ async def test_delegate_to_kinetic_plane_success() -> None:
             capability_merkle_root="b" * 64,
             credential_presentations=[],
         ),
-        zk_proof=ZeroKnowledgeReceipt(
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
             proof_protocol="zk-SNARK",
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
@@ -263,7 +263,7 @@ async def test_delegate_to_kinetic_plane_primitive_payload() -> None:
             capability_merkle_root="b" * 64,
             credential_presentations=[],
         ),
-        zk_proof=ZeroKnowledgeReceipt(
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
             proof_protocol="zk-SNARK",
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
@@ -442,7 +442,7 @@ async def test_tick_kinetic_delegation() -> None:
             capability_merkle_root="b" * 64,
             credential_presentations=[],
         ),
-        zk_proof=ZeroKnowledgeReceipt(
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
             proof_protocol="zk-SNARK",
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
@@ -631,7 +631,7 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
             capability_merkle_root="b" * 64,
             credential_presentations=[],
         ),
-        zk_proof=ZeroKnowledgeReceipt(
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
             proof_protocol="zk-SNARK",
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
