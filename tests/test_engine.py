@@ -753,3 +753,24 @@ async def test_tick_kinetic_delegation_general_exception() -> None:
         await orchestrator.tick()
 
     assert "Kinetic crash" in str(exc_info.value.exceptions[0])
+
+
+def test_engine_zero_cost_macro() -> None:
+    from coreason_manifest.spec.ontology import DAGTopologyManifest, EpistemicProvenanceReceipt, WorkflowManifest
+
+    from coreason_orchestrator.engine import CoreOrchestrator
+
+    base_topology = DAGTopologyManifest.model_construct(nodes={}, max_depth=1, max_fan_out=1)
+
+    class MockTopology:
+        def compile_to_base_topology(self) -> DAGTopologyManifest:
+            return base_topology
+
+    workflow = WorkflowManifest.model_construct(
+        genesis_provenance=EpistemicProvenanceReceipt.model_construct(extracted_by="", source_event_id=""),
+        manifest_version="1",
+        topology=MockTopology(),  # type: ignore[arg-type, call-arg]
+    )
+
+    orchestrator = CoreOrchestrator(workflow, None, None, None)  # type: ignore[arg-type]
+    assert orchestrator.workflow.topology == base_topology
