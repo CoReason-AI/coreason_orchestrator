@@ -13,10 +13,13 @@ from typing import Any
 from coreason_manifest.spec.ontology import (
     DefeasibleCascadeEvent,
     EpistemicLedgerState,
+    ExecutionNodeReceipt,
     RollbackIntent,
     StateDifferentialManifest,
     StateMutationIntent,
+    TamperFaultEvent,
 )
+from coreason_manifest.utils.algebra import verify_merkle_proof
 
 from coreason_orchestrator.factory import EventFactory
 
@@ -37,7 +40,24 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
     Returns:
         A new instance of EpistemicLedgerState with the mathematically bound event appended.
     """
-    # 1. Synthesize the mathematically bound event using EventFactory to ensure
+    # 1. Enforce Cryptographic Integrity on Execution Traces
+    if (
+        isinstance(event, list)
+        and len(event) > 0
+        and isinstance(event[0], ExecutionNodeReceipt)
+        and not verify_merkle_proof(event)
+    ):
+        raise TamperFaultEvent("Merkle-DAG validation failed. Trace is cryptographically compromised.")
+
+    # 2. Basic Zero-Knowledge Proof sanity check
+    if (
+        hasattr(event, "zk_proof")
+        and event.zk_proof is not None
+        and not getattr(event.zk_proof, "public_inputs_hash", None)
+    ):
+        raise TamperFaultEvent("ZK-Proof missing public inputs hash.")
+
+    # 3. Synthesize the mathematically bound event using EventFactory to ensure
     # the RFC 8785 hash is deterministically bound prior to final instantiation.
     # We dump the passed in event's parameters to rebuild it strictly through the factory
     event_kwargs = event.model_dump(exclude={"event_id"})
@@ -78,6 +98,12 @@ def apply_rollback(
         StateMutationIntent(op="add", path="/active_rollbacks/-", value=rollback.model_dump()),
         StateMutationIntent(op="add", path="/active_cascades/-", value=cascade.model_dump()),
     ]
+
+    # Explicitly isolate the falsified subgraph to prevent epistemic contagion
+    patches.extend(
+        StateMutationIntent(op="add", path="/retracted_nodes/-", value=node_id)
+        for node_id in cascade.quarantined_event_ids
+    )
 
     return EventFactory.build_event(
         StateDifferentialManifest,
