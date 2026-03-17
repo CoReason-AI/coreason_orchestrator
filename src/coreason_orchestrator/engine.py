@@ -47,6 +47,11 @@ class CoreOrchestrator:
         action_space_registry: dict[str, "ActionSpaceManifest"] | None = None,
     ) -> None:
         self.workflow = workflow
+        # Dynamically unroll Zero-Cost Macros into executable Base Topologies
+        if hasattr(self.workflow.topology, "compile_to_base_topology"):
+            self.workflow = self.workflow.model_copy(
+                update={"topology": self.workflow.topology.compile_to_base_topology()}
+            )
         self.ledger = ledger
         self.inference_engine = inference_engine
         self.actuator_engine = actuator_engine
