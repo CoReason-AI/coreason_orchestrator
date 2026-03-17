@@ -24,7 +24,6 @@ from coreason_manifest.spec.ontology import (
 )
 
 from coreason_orchestrator.factory import EventFactory
-from coreason_orchestrator.hydration import compile_state_hydration
 from coreason_orchestrator.interfaces import ActuatorEngineProtocol, InferenceEngineProtocol
 from coreason_orchestrator.ledger import append_event
 from coreason_orchestrator.resolve import resolve_current_node
@@ -59,7 +58,9 @@ class CoreOrchestrator:
         self._ledger_lock = asyncio.Lock()
         self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
 
-    async def delegate_to_cognitive_plane(self, node: AgentNodeProfile) -> None:
+    async def delegate_to_cognitive_plane(
+        self, node: AgentNodeProfile, node_id: str, action_space: ActionSpaceManifest
+    ) -> None:
         """
         Delegates the generation of intent to the physically air-gapped Inference Engine.
 
@@ -69,9 +70,13 @@ class CoreOrchestrator:
 
         Args:
             node: The current active AgentNodeProfile requesting cognitive evaluation.
+            node_id: The identifier of the node.
+            action_space: The action space manifest.
         """
         # 1. Dispatch the current node profile and strictly read-only ledger
-        payload, burn_receipt, _ = await self.inference_engine.generate_intent(node, self.ledger)
+        payload, burn_receipt, _scratchpad, _cognitive_receipt = await self.inference_engine.generate_intent(
+            node, self.ledger, node_id, action_space
+        )
 
         # 2. Append the generated intent/event and thermodynamic burn receipt to the ledger securely
         async with self._ledger_lock:
@@ -90,23 +95,8 @@ class CoreOrchestrator:
             intent: The validated ToolInvocationEvent from the Cognitive Plane.
             manifest: The associated ToolManifest defining the capability.
         """
-        # 1. Compile a lightweight hydration manifest to prevent massive IPC serialization
-        if self.ledger.eviction_policy is not None:
-            max_tokens = self.ledger.eviction_policy.max_retained_tokens
-        elif self.workflow.governance is not None and hasattr(self.workflow.governance, "max_budget_magnitude"):
-            max_tokens = getattr(self.workflow.governance, "max_budget_magnitude", 50000)
-        else:
-            max_tokens = 50000
-
-        ledger_manifest = compile_state_hydration(
-            ledger=self.ledger,
-            coordinate=self.workflow.manifest_version,  # Using version as a safe fallback coordinate
-            context={},  # No ephemeral context by default
-            max_tokens=max_tokens,
-        )
-
         # 2. Dispatch execution and strictly await the raw JSON payload
-        raw_payload = await self.actuator_engine.execute(intent, manifest, ledger_manifest)
+        raw_payload = await self.actuator_engine.execute(intent, manifest, self.ledger.eviction_policy)
 
         # 3. Securely synthesize the ObservationEvent natively (Zero-Trust)
         # We must explicitly cast raw_payload to dict[str, Any] as required by ObservationEvent payload
@@ -251,7 +241,20 @@ class CoreOrchestrator:
         try:
             async with asyncio.TaskGroup() as tg:
                 for node in frontier_nodes:
-                    tg.create_task(self.delegate_to_cognitive_plane(node))
+                    node_id = "unknown"
+                    if hasattr(self.workflow.topology, "nodes"):
+                        for n_id, n_obj in self.workflow.topology.nodes.items():
+                            if n_obj is node:
+                                node_id = str(n_id)
+                                break
+
+                    resolved_action_space: ActionSpaceManifest | None = None
+                    if node.action_space_id:
+                        resolved_action_space = self.action_space_registry.get(node.action_space_id)
+                    if resolved_action_space is None:
+                        resolved_action_space = ActionSpaceManifest(action_space_id="default", native_tools=[])
+
+                    tg.create_task(self.delegate_to_cognitive_plane(node, node_id, resolved_action_space))
         except ExceptionGroup as eg:
             raise ExceptionGroup("Cognitive Plane Faults", eg.exceptions) from eg
 

@@ -75,7 +75,7 @@ async def test_delegate_to_cognitive_plane_success() -> None:
         burn_magnitude=30,
     )
 
-    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None)
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
 
     orchestrator = CoreOrchestrator(
         workflow=workflow,
@@ -85,12 +85,13 @@ async def test_delegate_to_cognitive_plane_success() -> None:
     )
 
     node = get_mock_node()
+    mock_action_space = ActionSpaceManifest(action_space_id="test_space", native_tools=[])
 
     # Execute
-    await orchestrator.delegate_to_cognitive_plane(node)
+    await orchestrator.delegate_to_cognitive_plane(node, "node_1", mock_action_space)
 
     # Verify calls
-    inference_engine.generate_intent.assert_called_once_with(node, ledger)
+    inference_engine.generate_intent.assert_called_once_with(node, ledger, "node_1", mock_action_space)
 
     # Verify ledger was updated correctly
     # Note: append_event nullifies event_id to calculate a hash, so the ids will differ from e1/e2
@@ -122,9 +123,10 @@ async def test_delegate_to_cognitive_plane_inference_error() -> None:
     )
 
     node = get_mock_node()
+    mock_action_space = ActionSpaceManifest(action_space_id="test_space", native_tools=[])
 
     with pytest.raises(InferenceConvergenceError, match="Failed to converge"):
-        await orchestrator.delegate_to_cognitive_plane(node)
+        await orchestrator.delegate_to_cognitive_plane(node, "node_1", mock_action_space)
 
     # Ledger should remain unchanged
     assert len(orchestrator.ledger.history) == 0
@@ -189,19 +191,18 @@ async def test_delegate_to_kinetic_plane_success() -> None:
     call_args = actuator_engine.execute.call_args[0]
     assert call_args[0] == intent
     assert call_args[1] == manifest
-    assert call_args[2].max_retained_tokens == 50000  # Default when governance and eviction policy are absent
+    assert call_args[2] is None  # Default when eviction policy is absent
 
-    # Test dynamic max_retained_tokens overriding via EvictionPolicy
+    # Test dynamic eviction policy propagation
     from coreason_manifest.spec.ontology import EvictionPolicy
 
-    orchestrator.ledger = orchestrator.ledger.model_copy(
-        update={"eviction_policy": EvictionPolicy(strategy="fifo", max_retained_tokens=10000, protected_event_ids=[])}
-    )
+    policy = EvictionPolicy(strategy="fifo", max_retained_tokens=10000, protected_event_ids=[])
+    orchestrator.ledger = orchestrator.ledger.model_copy(update={"eviction_policy": policy})
     await orchestrator.delegate_to_kinetic_plane(intent, manifest)
     call_args = actuator_engine.execute.call_args[0]
-    assert call_args[2].max_retained_tokens == 10000
+    assert call_args[2] is policy
 
-    # Test dynamic max_retained_tokens overriding via GovernancePolicy
+    # Test dynamic max_retained_tokens overriding via GovernancePolicy (for coverage of hydration fallback)
     from coreason_manifest.spec.ontology import ConstitutionalPolicy, GlobalGovernancePolicy
 
     orchestrator.ledger = orchestrator.ledger.model_copy(update={"eviction_policy": None})
@@ -218,8 +219,9 @@ async def test_delegate_to_kinetic_plane_success() -> None:
         }
     )
     await orchestrator.delegate_to_kinetic_plane(intent, manifest)
-    call_args = actuator_engine.execute.call_args[0]
-    assert call_args[2].max_retained_tokens == 8000
+
+    # Clean up overriding
+    orchestrator.ledger = orchestrator.ledger.model_copy(update={"eviction_policy": None})
 
     # Verify ledger was updated correctly
     assert len(orchestrator.ledger.history) == 3
@@ -383,7 +385,9 @@ async def test_tick_terminal() -> None:
 @pytest.mark.asyncio
 async def test_tick_cognitive_delegation() -> None:
     """Verifies tick delegates to cognitive plane when needed."""
-    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="test_space"
+    )
 
     # Needs to copy safely
     workflow = get_mock_workflow()
@@ -405,18 +409,21 @@ async def test_tick_cognitive_delegation() -> None:
         output_tokens=20,
         burn_magnitude=30,
     )
-    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None)
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
 
     orchestrator = CoreOrchestrator(
         workflow=workflow,
         ledger=ledger,
         inference_engine=inference_engine,
         actuator_engine=actuator_engine,
+        action_space_registry={"test_space": ActionSpaceManifest(action_space_id="test_space", native_tools=[])},
     )
 
     result = await orchestrator.tick()
     assert result is True
-    inference_engine.generate_intent.assert_called_once_with(node_a, ledger)
+    inference_engine.generate_intent.assert_called_once_with(
+        node_a, ledger, "did:coreason:node:a", ActionSpaceManifest(action_space_id="test_space", native_tools=[])
+    )
 
 
 @pytest.mark.asyncio
