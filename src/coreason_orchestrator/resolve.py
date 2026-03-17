@@ -84,30 +84,17 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
                 # We might consider ObservationEvent as a state event that implies execution happened on the node
                 completed_nodes.add(event.source_node_id)
 
-            # FR-2.2 Conditional Edges: Extract embedded DynamicRoutingManifest from the ObservationEvent payload.
-            # We attempt to unpack it if the payload structure matches a DynamicRoutingManifest dictionary.
-            # Specifically checking for the existence of its mandated tracking keys.
-            if isinstance(event.payload, dict) and (
-                "active_subgraphs" in event.payload or "bypassed_steps" in event.payload
-            ):
+            # FR-2.2 Conditional Edges: Extract embedded DynamicRoutingManifest from the ObservationEvent natively.
+            embedded_routing_manifest = getattr(event, "embedded_routing_manifest", None)
+            if embedded_routing_manifest is not None:
                 has_routing_manifest = True
-                # bypassed_steps is a list of BypassReceipt dicts
-                bypassed_steps = event.payload.get("bypassed_steps", [])
-                if isinstance(bypassed_steps, list):
-                    for step in bypassed_steps:
-                        if isinstance(step, dict) and "bypassed_node_id" in step:
-                            node_id = step["bypassed_node_id"]
-                            if isinstance(node_id, str):
-                                completed_nodes.add(node_id)
 
-                # active_subgraphs is a dict[str, list[NodeIdentifierState]]
-                active_subgraphs = event.payload.get("active_subgraphs", {})
-                if isinstance(active_subgraphs, dict):
-                    for subgraph_nodes in active_subgraphs.values():
-                        if isinstance(subgraph_nodes, list):
-                            for n in subgraph_nodes:
-                                if isinstance(n, str):
-                                    active_subgraphs_set.add(n)
+                for step in embedded_routing_manifest.bypassed_steps:
+                    completed_nodes.add(step.bypassed_node_id)
+
+                for subgraph_nodes in embedded_routing_manifest.active_subgraphs.values():
+                    for n in subgraph_nodes:
+                        active_subgraphs_set.add(n)
 
     # Build adjacency list (forward edges) and in-degree tracking (predecessors)
     adj: dict[str, list[str]] = {str(n): [] for n in nodes}

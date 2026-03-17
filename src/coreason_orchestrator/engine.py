@@ -203,34 +203,48 @@ class CoreOrchestrator:
 
         if pending_tools:
             # We need to dispatch the kinetic actuator for all pending tools.
-            async with asyncio.TaskGroup() as tg:
-                for intent in pending_tools:
-                    # Verify the tool against the active node's ActionSpaceManifest
-                    # We evaluate the active nodes on the frontier to find the authorized tool.
-                    found_manifest = None
-                    if frontier_nodes:
-                        for node in frontier_nodes:
-                            if node.action_space_id and node.action_space_id in self.action_space_registry:
-                                action_space = self.action_space_registry[node.action_space_id]
-                                for tool in action_space.native_tools:
-                                    if tool.tool_name == intent.tool_name:
-                                        found_manifest = tool
-                                        break
-                                if found_manifest:
+            tasks = []
+            for intent in pending_tools:
+                # Verify the tool against the active node's ActionSpaceManifest
+                # We evaluate the active nodes on the frontier to find the authorized tool.
+                found_manifest = None
+                if frontier_nodes:
+                    for node in frontier_nodes:
+                        if node.action_space_id and node.action_space_id in self.action_space_registry:
+                            action_space = self.action_space_registry[node.action_space_id]
+                            for tool in action_space.native_tools:
+                                if tool.tool_name == intent.tool_name:
+                                    found_manifest = tool
                                     break
+                            if found_manifest:
+                                break
 
-                    if not found_manifest:
-                        # FR-4.1: The Orchestrator MUST verify any requested ToolInvocationEvent
-                        # against the allowed ActionSpaceManifest bound to the current node.
-                        raise RuntimeError(f"Tool '{intent.tool_name}' not found in the allowed ActionSpaceManifest.")
+                if not found_manifest:
+                    # FR-4.1: The Orchestrator MUST verify any requested ToolInvocationEvent
+                    # against the allowed ActionSpaceManifest bound to the current node.
 
-                    tg.create_task(self.delegate_to_kinetic_plane(intent, found_manifest))
+                    # We inject a failed task to simulate the ExceptionGroup behavior
+                    # from the previous TaskGroup since gather does not wrap in ExceptionGroup
+                    async def _fail(tool_name: str) -> None:
+                        raise RuntimeError(f"Tool '{tool_name}' not found in the allowed ActionSpaceManifest.")
+
+                    tasks.append(_fail(intent.tool_name))
+                else:
+                    tasks.append(self.delegate_to_kinetic_plane(intent, found_manifest))
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            exceptions = [res for res in results if isinstance(res, Exception)]
+            if exceptions:
+                raise ExceptionGroup("Kinetic Plane Faults", exceptions)
+
             return True
 
         # 3. If no pending kinetic task, delegate to the Cognitive Plane concurrently for all nodes in the frontier
-        async with asyncio.TaskGroup() as tg:
-            for node in frontier_nodes:
-                tg.create_task(self.delegate_to_cognitive_plane(node))
+        tasks = [self.delegate_to_cognitive_plane(node) for node in frontier_nodes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        exceptions = [res for res in results if isinstance(res, Exception)]
+        if exceptions:
+            raise ExceptionGroup("Cognitive Plane Faults", exceptions)
 
         return True
 

@@ -86,6 +86,10 @@ def run(
         actuator_engine=actuator_engine,  # type: ignore[arg-type]
     )
 
+    # 6. Bind to an actual event queue/message broker to receive preemption interrupts
+    message_broker = asyncio.Queue()  # type: ignore[var-annotated]
+    orchestrator.interrupt_queue = message_broker
+
     try:
         asyncio.run(orchestrator.run_event_loop())
     except Exception as e:
