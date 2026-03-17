@@ -70,11 +70,18 @@ def test_event_factory_creates_event_with_hash() -> None:
 
 
 def test_event_factory_with_defaults_and_coercion() -> None:
-    """Test that EventFactory correctly incorporates Pydantic's default values and type coercion into the hash."""
-    # Pass string "42" instead of int 42, and omit the status field to trigger the default "pending"
-    event = EventFactory.build_event(MockDefaultCoercionEvent, count="42")  # type: ignore[arg-type]
+    """Test that EventFactory correctly enforces strict type checking to avoid coercion drift in the hash."""
+    # By passing string "42" instead of int 42, strict mode should raise a ValidationError
+    import pytest
+    from pydantic import ValidationError
 
-    # The expected hash MUST be computed from the coerced and defaulted values
+    with pytest.raises(ValidationError):
+        EventFactory.build_event(MockDefaultCoercionEvent, count="42")  # type: ignore[arg-type]
+
+    # Valid construction correctly uses the default field
+    event = EventFactory.build_event(MockDefaultCoercionEvent, count=42)
+
+    # The expected hash MUST be computed from the exact values
     dump = {"count": 42, "status": "pending"}
     expected_hash = calculate_event_hash(dump)
 

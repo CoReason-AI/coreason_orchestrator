@@ -52,7 +52,7 @@ class EventFactory:
 
             if name in kwargs:
                 # Natively coerce the given input using Pydantic's TypeAdapter for the field
-                processed_kwargs[name] = TypeAdapter(field.annotation).validate_python(kwargs[name])
+                processed_kwargs[name] = TypeAdapter(field.annotation).validate_python(kwargs[name], strict=True)
             elif field.default is not ... and field.default.__class__.__name__ != "PydanticUndefinedType":
                 # Apply scalar defaults
                 processed_kwargs[name] = field.default

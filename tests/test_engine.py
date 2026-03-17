@@ -609,6 +609,35 @@ async def test_run_event_loop_general_exception(capsys: pytest.CaptureFixture[st
 
 
 @pytest.mark.asyncio
+async def test_tick_cognitive_plane_fault() -> None:
+    """Verifies that Cognitive Plane faults are properly gathered into an ExceptionGroup."""
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+
+    inference_engine = AsyncMock()
+    inference_engine.generate_intent.side_effect = RuntimeError("Cognitive failure")
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    # Node to trigger delegate_to_cognitive_plane
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+    orchestrator.workflow = workflow
+
+    with pytest.raises(ExceptionGroup) as exc_info:
+        await orchestrator.tick()
+    assert "Cognitive Plane Faults" in str(exc_info.value)
+    assert len(exc_info.value.exceptions) == 1
+
+
+@pytest.mark.asyncio
 async def test_tick_kinetic_delegation_tool_not_found() -> None:
     """Verifies that an exception is raised when tool is missing from ActionSpaceManifest."""
     node_a = AgentNodeProfile(

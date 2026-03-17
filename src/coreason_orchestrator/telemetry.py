@@ -47,8 +47,8 @@ def _strip_lineage(obj: Any) -> Any:
             for k, v in obj.items()
             if k not in ("event_id", "diff_id", "node_id", "edge_id", "checkpoint_id")
         }
-    if isinstance(obj, list):
-        return [_strip_lineage(item) for item in obj]
+    if isinstance(obj, (list, tuple, set)):
+        return type(obj)(_strip_lineage(item) for item in obj)
     return obj
 
 

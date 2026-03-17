@@ -45,8 +45,7 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
 
     # 2. Append the crystallized event to the history array
     # Since ledger is an immutable snapshot, we create a new ledger object.
-    new_history = list(ledger.history)
-    new_history.append(crystallized_event)
+    new_history = (*ledger.history, crystallized_event)
 
     return ledger.model_copy(update={"history": new_history})
 
