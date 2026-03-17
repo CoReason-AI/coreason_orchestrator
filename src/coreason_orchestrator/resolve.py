@@ -85,16 +85,41 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
                 completed_nodes.add(event.source_node_id)
 
             # FR-2.2 Conditional Edges: Extract embedded DynamicRoutingManifest from the ObservationEvent natively.
-            embedded_routing_manifest = getattr(event, "embedded_routing_manifest", None)
-            if embedded_routing_manifest is not None:
+            embedded_routing_manifest_raw = (
+                event.payload.get("embedded_routing_manifest") if isinstance(event.payload, dict) else None
+            )
+
+            if embedded_routing_manifest_raw is not None:
                 has_routing_manifest = True
 
-                for step in embedded_routing_manifest.bypassed_steps:
-                    completed_nodes.add(step.bypassed_node_id)
+                import contextlib
 
-                for subgraph_nodes in embedded_routing_manifest.active_subgraphs.values():
-                    for n in subgraph_nodes:
-                        active_subgraphs_set.add(n)
+                from coreason_manifest.spec.ontology import DynamicRoutingManifest
+
+                with contextlib.suppress(Exception):
+                    if not isinstance(embedded_routing_manifest_raw, DynamicRoutingManifest):
+                        if isinstance(embedded_routing_manifest_raw, dict):
+                            routing_manifest = DynamicRoutingManifest.model_construct(**embedded_routing_manifest_raw)  # type: ignore[arg-type]
+                        else:
+                            continue  # Ignore invalid payload shapes
+                    else:
+                        routing_manifest = embedded_routing_manifest_raw
+
+                    # We might have instantiated lists of raw dictionaries due to model_construct,
+                    # so access them safely as dicts or objects depending on what model_construct did
+                    bypassed_steps = getattr(routing_manifest, "bypassed_steps", [])
+                    for step in bypassed_steps:
+                        if isinstance(step, dict):
+                            node_id = step.get("bypassed_node_id")
+                            if node_id is not None:
+                                completed_nodes.add(str(node_id))
+                        else:
+                            completed_nodes.add(str(step.bypassed_node_id))
+
+                    active_subgraphs = getattr(routing_manifest, "active_subgraphs", {})
+                    for subgraph_nodes in active_subgraphs.values():
+                        for n in subgraph_nodes:
+                            active_subgraphs_set.add(str(n))
 
     # Build adjacency list (forward edges) and in-degree tracking (predecessors)
     adj: dict[str, list[str]] = {str(n): [] for n in nodes}

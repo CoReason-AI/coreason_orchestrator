@@ -683,7 +683,73 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
         action_space_registry={"test_space": action_space},
     )
 
+    result = await orchestrator.tick()
+
+    assert result is True
+    # Verify a SystemFaultEvent was appended to the ledger
+    from coreason_manifest.spec.ontology import SystemFaultEvent
+
+    assert isinstance(orchestrator.ledger.history[-1], SystemFaultEvent)
+
+
+@pytest.mark.asyncio
+async def test_tick_kinetic_delegation_general_exception() -> None:
+    """Verifies that an exception during kinetic plane dispatch is caught and re-raised."""
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="test_space"
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    intent = ToolInvocationEvent(
+        event_id="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        timestamp=1.0,
+        type="tool_invocation",
+        tool_name="existing_tool",
+        parameters={},
+        authorized_budget_magnitude=0,
+        agent_attestation=AgentAttestationReceipt(
+            training_lineage_hash="a" * 64,
+            developer_signature="sig",
+            capability_merkle_root="b" * 64,
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt(
+            proof_protocol="zk-SNARK",
+            public_inputs_hash="c" * 64,
+            verifier_key_id="key1",
+            cryptographic_blob="blob1",
+            latent_state_commitments={},
+        ),
+    )
+    ledger = EpistemicLedgerState(history=[intent])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    actuator_engine.execute.side_effect = RuntimeError("Kinetic crash")
+
+    action_space = ActionSpaceManifest(
+        action_space_id="test_space",
+        native_tools=[
+            ToolManifest.model_construct(
+                tool_name="existing_tool",
+                description="test",
+                input_schema={"type": "object", "properties": {}},
+                side_effects={"impacts_state": False, "mutates_external_systems": False},  # type: ignore[arg-type]
+                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},  # type: ignore[arg-type]
+            )
+        ],
+    )
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
+    )
+
     with pytest.raises(ExceptionGroup) as exc_info:
         await orchestrator.tick()
 
-    assert "not found in the allowed ActionSpaceManifest" in str(exc_info.value.exceptions[0])
+    assert "Kinetic crash" in str(exc_info.value.exceptions[0])
