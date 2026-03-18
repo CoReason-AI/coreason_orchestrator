@@ -8,16 +8,17 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from coreason_manifest.spec.ontology import (
+    ActionSpaceManifest,
     AgentNodeProfile,
     AnyIntent,
     AnyStateEvent,
     EpistemicLedgerState,
+    EvictionPolicy,
     JsonPrimitiveState,
     LatentScratchpadReceipt,
-    StateHydrationManifest,
     TokenBurnReceipt,
     ToolInvocationEvent,
     ToolManifest,
@@ -31,8 +32,8 @@ class InferenceConvergenceError(Exception):
 @runtime_checkable
 class InferenceEngineProtocol(Protocol):
     async def generate_intent(
-        self, node: AgentNodeProfile, ledger: EpistemicLedgerState
-    ) -> tuple[AnyIntent | AnyStateEvent, TokenBurnReceipt, LatentScratchpadReceipt | None]:
+        self, node: AgentNodeProfile, ledger: EpistemicLedgerState, node_id: str, action_space: ActionSpaceManifest
+    ) -> tuple[AnyIntent | AnyStateEvent, TokenBurnReceipt, LatentScratchpadReceipt | None, Any]:
         """
         Dispatches the read-only ledger to the air-gapped Cognitive Plane.
         The Orchestrator strictly awaits a valid intent or terminal state event
@@ -43,7 +44,7 @@ class InferenceEngineProtocol(Protocol):
 @runtime_checkable
 class ActuatorEngineProtocol(Protocol):
     async def execute(
-        self, intent: ToolInvocationEvent, manifest: ToolManifest, ledger_manifest: StateHydrationManifest
+        self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None
     ) -> JsonPrimitiveState:
         """
         Dispatches a mathematical intent to the Kinetic Plane.
