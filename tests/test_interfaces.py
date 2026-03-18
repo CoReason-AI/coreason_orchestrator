@@ -8,15 +8,18 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
+from typing import Any
+
 import pytest
 from coreason_manifest.spec.ontology import (
+    ActionSpaceManifest,
     AgentNodeProfile,
     AnyIntent,
     AnyStateEvent,
     EpistemicLedgerState,
+    EvictionPolicy,
     JsonPrimitiveState,
     LatentScratchpadReceipt,
-    StateHydrationManifest,
     TokenBurnReceipt,
     ToolInvocationEvent,
     ToolManifest,
@@ -42,8 +45,8 @@ def test_inference_engine_protocol_typing() -> None:
 
     class MockInferenceEngine:
         async def generate_intent(
-            self, node: AgentNodeProfile, ledger: EpistemicLedgerState
-        ) -> tuple[AnyIntent | AnyStateEvent, TokenBurnReceipt, LatentScratchpadReceipt | None]:
+            self, node: AgentNodeProfile, ledger: EpistemicLedgerState, node_id: str, action_space: ActionSpaceManifest
+        ) -> tuple[AnyIntent | AnyStateEvent, TokenBurnReceipt, LatentScratchpadReceipt | None, Any]:
             # Simple mock implementation to satisfy the type checker.
             raise NotImplementedError
 
@@ -56,7 +59,7 @@ def test_actuator_engine_protocol_typing() -> None:
 
     class MockActuatorEngine:
         async def execute(
-            self, intent: ToolInvocationEvent, manifest: ToolManifest, ledger_manifest: StateHydrationManifest
+            self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None
         ) -> JsonPrimitiveState:
             # Simple mock implementation to satisfy the type checker.
             raise NotImplementedError
