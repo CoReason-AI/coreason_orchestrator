@@ -377,6 +377,8 @@ async def test_tick_terminal() -> None:
 
     # workflow has empty nodes, so terminal
     result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
     assert result is False
     inference_engine.generate_intent.assert_not_called()
     actuator_engine.execute.assert_not_called()
@@ -420,6 +422,8 @@ async def test_tick_cognitive_delegation() -> None:
     )
 
     result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
     assert result is True
     inference_engine.generate_intent.assert_called_once_with(
         node_a, ledger, "did:coreason:node:a", ActionSpaceManifest(action_space_id="test_space", native_tools=[])
@@ -480,6 +484,8 @@ async def test_tick_kinetic_delegation() -> None:
     )
 
     result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
     assert result is True
     actuator_engine.execute.assert_called_once()
 
@@ -640,6 +646,8 @@ async def test_tick_cognitive_plane_fault() -> None:
 
     with pytest.raises(ExceptionGroup) as exc_info:
         await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
     assert "Cognitive Plane Faults" in str(exc_info.value)
     assert len(exc_info.value.exceptions) == 1
 
@@ -691,6 +699,8 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
     )
 
     result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
 
     assert result is True
     # Verify a SystemFaultEvent was appended to the ledger
@@ -758,6 +768,8 @@ async def test_tick_kinetic_delegation_general_exception() -> None:
 
     with pytest.raises(ExceptionGroup) as exc_info:
         await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
 
     assert "Kinetic crash" in str(exc_info.value.exceptions[0])
 
@@ -831,3 +843,449 @@ def test_init_without_workflow() -> None:
     )
 
     assert orchestrator.workflow is None
+
+
+@pytest.mark.asyncio
+async def test_tick_delegate_cognitive_plane_node_id_resolution() -> None:
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    # Mock return value for generate_intent
+
+    mock_event = ObservationEvent.model_construct(event_id="test", timestamp=1.0, type="observation", payload={})
+    from coreason_manifest.spec.ontology import TokenBurnReceipt
+
+    mock_burn = TokenBurnReceipt.model_construct(
+        event_id="burn",
+        timestamp=1.0,
+        type="token_burn",
+        tool_invocation_id="test",
+        input_tokens=0,
+        output_tokens=0,
+        burn_magnitude=0,
+    )
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
+
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
+    assert result is True
+    # wait for tasks to finish
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    inference_engine.generate_intent.assert_called_once()
+    args = inference_engine.generate_intent.call_args[0]
+    assert args[0] is node_a
+    assert args[1] is ledger
+    assert args[2] == "did:coreason:node:a"
+    assert args[3].action_space_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_tick_delegate_cognitive_plane_node_action_space_resolution() -> None:
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="custom_space"
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    # Mock return value for generate_intent
+
+    mock_event = ObservationEvent.model_construct(event_id="test", timestamp=1.0, type="observation", payload={})
+    from coreason_manifest.spec.ontology import TokenBurnReceipt
+
+    mock_burn = TokenBurnReceipt.model_construct(
+        event_id="burn",
+        timestamp=1.0,
+        type="token_burn",
+        tool_invocation_id="test",
+        input_tokens=0,
+        output_tokens=0,
+        burn_magnitude=0,
+    )
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
+
+    actuator_engine = AsyncMock()
+
+    custom_space = ActionSpaceManifest(action_space_id="custom_space", native_tools=[])
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"custom_space": custom_space},
+    )
+
+    result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
+    assert result is True
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    inference_engine.generate_intent.assert_called_once()
+    args = inference_engine.generate_intent.call_args[0]
+    assert args[3] is custom_space
+
+
+@pytest.mark.asyncio
+async def test_run_event_loop_natural_exit() -> None:
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    # Mock tick to return False on the first call to simulate natural exit
+    orchestrator.tick = AsyncMock(return_value=False)  # type: ignore
+
+    result_ledger = await orchestrator.run_event_loop()
+
+    assert result_ledger is orchestrator.ledger
+
+
+@pytest.mark.asyncio
+async def test_tick_intervention_policy_halt() -> None:
+    """Verifies that a pending tool is intercepted and halted by an InterventionPolicy."""
+    from coreason_manifest.spec.ontology import InterventionPolicy, ObservationEvent
+
+    policy = InterventionPolicy(trigger="before_tool_execution", blocking=True)
+    node_a = AgentNodeProfile(
+        description="A",
+        architectural_intent=".",
+        justification=".",
+        type="agent",
+        action_space_id="test_space",
+        intervention_policies=[policy],
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    intent = ToolInvocationEvent(
+        event_id="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        timestamp=1.0,
+        type="tool_invocation",
+        tool_name="existing_tool",
+        parameters={"test_param": "test_value"},
+        authorized_budget_magnitude=0,
+        agent_attestation=AgentAttestationReceipt(
+            training_lineage_hash="a" * 64,
+            developer_signature="sig",
+            capability_merkle_root="b" * 64,
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt(
+            proof_protocol="zk-SNARK",
+            public_inputs_hash="c" * 64,
+            verifier_key_id="key1",
+            cryptographic_blob="blob1",
+            latent_state_commitments={},
+        ),
+    )
+    ledger = EpistemicLedgerState(history=[intent])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    actuator_engine.execute.return_value = {"status": "ok"}
+
+    from coreason_manifest.spec.ontology import ToolManifest
+
+    action_space = ActionSpaceManifest(
+        action_space_id="test_space",
+        native_tools=[
+            ToolManifest.model_construct(
+                tool_name="existing_tool",
+                description="test",
+                input_schema={"type": "object", "properties": {}},
+                side_effects={"impacts_state": False, "mutates_external_systems": False},  # type: ignore[arg-type]
+                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},  # type: ignore[arg-type]
+            )
+        ],
+    )
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
+    )
+
+    result = await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
+    assert result is True
+
+    # Validate ObservationEvent wrapping InterventionIntent was appended
+    assert len(orchestrator.ledger.history) == 2
+    observation = orchestrator.ledger.history[-1]
+
+    assert isinstance(observation, ObservationEvent)
+
+    payload = observation.payload
+    assert isinstance(payload, dict)
+    assert payload.get("type") == "request"
+    assert payload.get("target_node_id") == "did:coreason:node:a"
+    assert "requires approval" in payload.get("context_summary", "")
+    assert payload.get("proposed_action", {}).get("event_id") == intent.event_id
+
+    # The kinetic plane should NOT have been called
+    actuator_engine.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_tick_intervention_policy_resume_with_receipt() -> None:
+    """Verifies that a pending tool is executed when an InterventionReceipt approves it."""
+    import uuid
+
+    from coreason_manifest.spec.ontology import (
+        InterventionIntent,
+        InterventionPolicy,
+        InterventionReceipt,
+        ObservationEvent,
+    )
+
+    from coreason_orchestrator.factory import EventFactory
+
+    policy = InterventionPolicy(trigger="before_tool_execution", blocking=True)
+    node_a = AgentNodeProfile(
+        description="A",
+        architectural_intent=".",
+        justification=".",
+        type="agent",
+        action_space_id="test_space",
+        intervention_policies=[policy],
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    intent_id = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    intent = ToolInvocationEvent(
+        event_id=intent_id,
+        timestamp=1.0,
+        type="tool_invocation",
+        tool_name="existing_tool",
+        parameters={"test_param": "test_value"},
+        authorized_budget_magnitude=0,
+        agent_attestation=AgentAttestationReceipt(
+            training_lineage_hash="a" * 64,
+            developer_signature="sig",
+            capability_merkle_root="b" * 64,
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt(
+            proof_protocol="zk-SNARK",
+            public_inputs_hash="c" * 64,
+            verifier_key_id="key1",
+            cryptographic_blob="blob1",
+            latent_state_commitments={},
+        ),
+    )
+
+    intervention_intent = EventFactory.build_event(
+        InterventionIntent,
+        target_node_id="did:coreason:node:a",
+        context_summary="Tool execution for 'existing_tool' requires approval.",
+        proposed_action={"event_id": intent_id},
+        adjudication_deadline=1.0,
+    )
+
+    # Note: intervention_request_id must match intent.event_id exactly, so we use UUID(intent.event_id[:32]) if needed,
+    # but intent_id is 64 hex characters. UUID expects a 32-character hex string.
+    # The intercept logic uses `str(event.intervention_request_id) == intent.event_id`.
+    # Let's create an intent ID that is a valid UUID string for this test.
+    uuid_str = str(uuid.uuid4())
+    intent = intent.model_copy(update={"event_id": uuid_str})
+    intervention_intent = intervention_intent.model_copy(update={"proposed_action": {"event_id": uuid_str}})
+
+    intervention_receipt = EventFactory.build_event(
+        InterventionReceipt,
+        intervention_request_id=uuid.UUID(uuid_str),
+        target_node_id="did:coreason:node:a",
+        approved=True,
+        feedback="Looks good",
+    )
+
+    import json
+
+    payload_intent = json.loads(intervention_intent.model_dump_json())
+    obs_intent = EventFactory.build_event(
+        ObservationEvent, timestamp=1.0, type="observation", payload=payload_intent, source_node_id=None
+    )
+
+    payload_receipt = json.loads(intervention_receipt.model_dump_json())
+    payload_receipt["intervention_request_id"] = intent.event_id  # ensure strict match
+
+    payload_receipt["intervention_request_id"] = intent.event_id
+    payload_receipt["approved"] = True
+    obs_receipt = EventFactory.build_event(
+        ObservationEvent, timestamp=2.0, type="observation", payload=payload_receipt, source_node_id=None
+    )
+
+    ledger = EpistemicLedgerState(history=[intent, obs_intent, obs_receipt])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    actuator_engine.execute.return_value = {"status": "ok"}
+
+    from coreason_manifest.spec.ontology import ToolManifest
+
+    action_space = ActionSpaceManifest(
+        action_space_id="test_space",
+        native_tools=[
+            ToolManifest.model_construct(
+                tool_name="existing_tool",
+                description="test",
+                input_schema={"type": "object", "properties": {}},
+                side_effects={"impacts_state": False, "mutates_external_systems": False},  # type: ignore[arg-type]
+                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},  # type: ignore[arg-type]
+            )
+        ],
+    )
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
+    )
+
+    await orchestrator.tick()
+    # Print debug info
+    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
+
+    # Wait for tasks to finish
+    await asyncio.sleep(0.1)
+
+    # Verify that the kinetic engine was called!
+    actuator_engine.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_tick_intervention_policy_wait_for_receipt() -> None:
+    """Verifies that a pending tool waits for an InterventionReceipt if InterventionIntent is already emitted."""
+    import uuid
+
+    from coreason_manifest.spec.ontology import InterventionIntent, InterventionPolicy, ObservationEvent
+
+    from coreason_orchestrator.factory import EventFactory
+
+    policy = InterventionPolicy(trigger="before_tool_execution", blocking=True)
+    node_a = AgentNodeProfile(
+        description="A",
+        architectural_intent=".",
+        justification=".",
+        type="agent",
+        action_space_id="test_space",
+        intervention_policies=[policy],
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    intent_id = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    intent = ToolInvocationEvent(
+        event_id=intent_id,
+        timestamp=1.0,
+        type="tool_invocation",
+        tool_name="existing_tool",
+        parameters={"test_param": "test_value"},
+        authorized_budget_magnitude=0,
+        agent_attestation=AgentAttestationReceipt(
+            training_lineage_hash="a" * 64,
+            developer_signature="sig",
+            capability_merkle_root="b" * 64,
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt(
+            proof_protocol="zk-SNARK",
+            public_inputs_hash="c" * 64,
+            verifier_key_id="key1",
+            cryptographic_blob="blob1",
+            latent_state_commitments={},
+        ),
+    )
+
+    intervention_intent = EventFactory.build_event(
+        InterventionIntent,
+        target_node_id="did:coreason:node:a",
+        context_summary="Tool execution for 'existing_tool' requires approval.",
+        proposed_action={"event_id": intent_id},
+        adjudication_deadline=1.0,
+    )
+
+    uuid_str = str(uuid.uuid4())
+    intent = intent.model_copy(update={"event_id": uuid_str})
+    intervention_intent = intervention_intent.model_copy(update={"proposed_action": {"event_id": uuid_str}})
+
+    import json
+
+    payload_intent = json.loads(intervention_intent.model_dump_json())
+    obs_intent = EventFactory.build_event(
+        ObservationEvent, timestamp=1.0, type="observation", payload=payload_intent, source_node_id=None
+    )
+
+    # Note: No obs_receipt is added to ledger!
+    ledger = EpistemicLedgerState(history=[intent, obs_intent])
+
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    actuator_engine.execute.return_value = {"status": "ok"}
+
+    from coreason_manifest.spec.ontology import ToolManifest
+
+    action_space = ActionSpaceManifest(
+        action_space_id="test_space",
+        native_tools=[
+            ToolManifest.model_construct(
+                tool_name="existing_tool",
+                description="test",
+                input_schema={"type": "object", "properties": {}},
+                side_effects={"impacts_state": False, "mutates_external_systems": False},
+                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},
+            )
+        ],
+    )
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"test_space": action_space},
+    )
+
+    await orchestrator.tick()
+
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    # Should NOT have executed
+    actuator_engine.execute.assert_not_called()

@@ -16,6 +16,7 @@ from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     BargeInInterruptEvent,
     EpistemicLedgerState,
+    InterventionIntent,
     ObservationEvent,
     TokenBurnReceipt,
     ToolInvocationEvent,
@@ -230,11 +231,16 @@ class CoreOrchestrator:
         if pending_tools:
             # We need to dispatch the kinetic actuator for all pending tools.
             try:
+                import json
+                import time
+
                 async with asyncio.TaskGroup() as tg:
                     for intent in pending_tools:
                         # Verify the tool against the active node's ActionSpaceManifest
                         # We evaluate the active nodes on the frontier to find the authorized tool.
                         found_manifest = None
+                        active_node = None
+                        active_node_id = "unknown"
                         if frontier_nodes:
                             for node in frontier_nodes:
                                 if node.action_space_id and node.action_space_id in self.action_space_registry:
@@ -242,6 +248,13 @@ class CoreOrchestrator:
                                     for tool in action_space.native_tools:
                                         if tool.tool_name == intent.tool_name:
                                             found_manifest = tool
+                                            active_node = node
+                                            # Resolve active_node_id
+                                            if hasattr(self.workflow.topology, "nodes"):
+                                                for n_id, n_obj in self.workflow.topology.nodes.items():
+                                                    if n_obj is node:
+                                                        active_node_id = str(n_id)
+                                                        break
                                             break
                                     if found_manifest:
                                         break
@@ -262,6 +275,81 @@ class CoreOrchestrator:
                             async with self._ledger_lock:
                                 self.ledger = append_event(self.ledger, fault)
                         else:
+                            # Intercept pending tools for InterventionPolicy evaluation
+                            requires_intervention = False
+                            if active_node and active_node.intervention_policies:
+                                for policy in active_node.intervention_policies:
+                                    if policy.trigger == "before_tool_execution":
+                                        requires_intervention = True
+                                        break
+
+                            if requires_intervention:
+                                # Check if an InterventionIntent was already emitted for this tool invocation
+                                intent_already_emitted = False
+                                for event in self.ledger.history:
+                                    if isinstance(event, ObservationEvent):
+                                        # Check if this ObservationEvent contains an InterventionIntent
+                                        payload = event.payload if isinstance(event.payload, dict) else {}
+                                        if "proposed_action" in payload and payload.get("target_node_id") is not None:
+                                            # proposed_action could be a string if JSON serialized, or dict
+                                            prop_act = payload["proposed_action"]
+                                            if (
+                                                isinstance(prop_act, dict)
+                                                and prop_act.get("event_id") == intent.event_id
+                                            ):
+                                                intent_already_emitted = True
+                                                break
+
+                                if not intent_already_emitted:
+                                    # Synthesize InterventionIntent
+                                    dumped = intent.model_dump()
+                                    proposed_action: dict[str, str | int | float | bool | None] = {}
+                                    for k, v in dumped.items():
+                                        if isinstance(v, (str, int, float, bool, type(None))):
+                                            proposed_action[k] = v
+                                        else:
+                                            proposed_action[k] = json.dumps(v)
+
+                                    intervention_intent = EventFactory.build_event(
+                                        InterventionIntent,
+                                        target_node_id=active_node_id,
+                                        context_summary=f"Tool execution for '{intent.tool_name}' requires approval.",
+                                        proposed_action=proposed_action,
+                                        adjudication_deadline=time.time() + 3600,
+                                    )
+
+                                    # Wrap it in an ObservationEvent to satisfy ledger schema constraints
+                                    observation = EventFactory.build_event(
+                                        ObservationEvent,
+                                        timestamp=time.time(),
+                                        type="observation",
+                                        payload=json.loads(intervention_intent.model_dump_json()),
+                                        triggering_invocation_id=intent.event_id,
+                                        source_node_id=active_node_id,
+                                    )
+
+                                    async with self._ledger_lock:
+                                        self.ledger = append_event(self.ledger, observation)
+                                    continue  # Skip delegation to kinetic plane this tick
+
+                                # If it was emitted, check if there is an approved InterventionReceipt
+                                is_approved = False
+                                for event in self.ledger.history:
+                                    if isinstance(event, ObservationEvent):
+                                        payload = event.payload if isinstance(event.payload, dict) else {}
+                                        if "intervention_request_id" in payload and "approved" in payload:
+                                            req_id = str(payload.get("intervention_request_id", ""))
+                                            if (
+                                                req_id == intent.event_id
+                                                or req_id.replace("-", "") == intent.event_id.replace("-", "")[:32]
+                                            ):
+                                                if payload.get("approved"):
+                                                    is_approved = True
+                                                break
+
+                                if not is_approved:
+                                    continue  # Wait for receipt, do not dispatch to kinetic plane
+
                             tg.create_task(self.delegate_to_kinetic_plane(intent, found_manifest))
             except ExceptionGroup as eg:
                 raise ExceptionGroup("Kinetic Plane Faults", eg.exceptions) from eg
