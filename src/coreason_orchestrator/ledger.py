@@ -11,9 +11,11 @@
 from typing import Any
 
 from coreason_manifest.spec.ontology import (
+    BeliefMutationEvent,
     DefeasibleCascadeEvent,
     EpistemicLedgerState,
     ExecutionNodeReceipt,
+    ObservationEvent,
     RollbackIntent,
     StateDifferentialManifest,
     StateMutationIntent,
@@ -63,9 +65,91 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
     event_kwargs = event.model_dump(exclude={"event_id"})
     crystallized_event = EventFactory.build_event(type(event), **event_kwargs)
 
-    # 2. Append the crystallized event to the history array
+    # 4. Check for automated Truth Maintenance if Epistemic Contraction is required.
+    # An ObservationEvent or BeliefMutationEvent with "falsified_node_id" in its payload triggers this.
+    cascade_manifest: StateDifferentialManifest | None = None
+    if isinstance(event, (ObservationEvent, BeliefMutationEvent)):
+        payload = event.payload
+        if isinstance(payload, dict):
+            falsified_node_id = payload.get("falsified_node_id")
+            if isinstance(falsified_node_id, str):
+                # We have a logical contradiction. Crawl the Merkle-DAG for downstream edges to quarantine.
+                quarantined_event_ids: list[str] = []
+                # Initialize queue with the root falsified node ID
+                falsified_queue: list[str] = [falsified_node_id]
+                visited_nodes: set[str] = set()
+
+                # Prevent infinite loops in cyclic dependencies
+                max_depth = getattr(ledger, "max_depth", 100)
+                max_loops = getattr(ledger, "max_loops", 1000)
+                loops = 0
+                current_depth = 0
+
+                while falsified_queue and current_depth < max_depth and loops < max_loops:
+                    current_depth += 1
+                    next_queue: list[str] = []
+
+                    for current_falsified_node in falsified_queue:
+                        if current_falsified_node in visited_nodes:
+                            continue
+                        visited_nodes.add(current_falsified_node)
+
+                        for history_event in ledger.history:
+                            loops += 1
+                            if loops >= max_loops:
+                                break
+
+                            # Semantic edges might be stored as nested dictionaries in BeliefMutationEvent payloads
+                            if isinstance(history_event, BeliefMutationEvent):
+                                if isinstance(history_event.payload, dict):
+                                    embedded_edges = history_event.payload.get("embedded_edges", [])
+                                if isinstance(embedded_edges, list):
+                                    for edge_dict in embedded_edges:
+                                        if isinstance(edge_dict, dict):
+                                            subj = edge_dict.get("subject_node_id")
+                                            obj = edge_dict.get("object_node_id")
+                                            edge_id = edge_dict.get("edge_id")
+
+                                            is_subj = subj == current_falsified_node
+                                            is_obj = obj == current_falsified_node
+                                            is_targeted = is_subj or is_obj
+
+                                            is_valid_edge = isinstance(edge_id, str)
+                                            if is_targeted and is_valid_edge and edge_id not in quarantined_event_ids:
+                                                quarantined_event_ids.append(str(edge_id))
+                                                # Recursively taint the target of the causal edge
+                                                if isinstance(obj, str) and obj != current_falsified_node:
+                                                    next_queue.append(obj)
+                                                if isinstance(subj, str) and subj != current_falsified_node:
+                                                    next_queue.append(subj)
+
+                    falsified_queue = next_queue
+
+                # Synthesize intents strictly adhering to Anti-CRUD and preventing O(N^2) memory
+                if quarantined_event_ids:
+                    cascade = DefeasibleCascadeEvent(
+                        cascade_id="placeholder",
+                        root_falsified_event_id=falsified_node_id,
+                        propagated_decay_factor=1.0,
+                        quarantined_event_ids=quarantined_event_ids,
+                    )
+
+                    # We compute a deterministic rollback to apply the cascade
+                    rollback = RollbackIntent(
+                        request_id="auto_truth_maintenance",
+                        target_event_id=falsified_node_id,
+                        invalidated_node_ids=[falsified_node_id],
+                    )
+
+                    # Apply rollback natively yields a StateDifferentialManifest correctly
+                    cascade_manifest = apply_rollback(ledger, rollback, cascade)
+
+    # 5. Append the crystallized event (and potentially the cascade) to the history array
     # Since ledger is an immutable snapshot, we create a new ledger object.
-    new_history = (*ledger.history, crystallized_event)
+    if cascade_manifest:
+        new_history = (*ledger.history, crystallized_event, cascade_manifest)
+    else:
+        new_history = (*ledger.history, crystallized_event)
 
     return ledger.model_copy(update={"history": new_history})
 

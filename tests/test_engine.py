@@ -1052,8 +1052,14 @@ async def test_tick_intervention_policy_halt() -> None:
     assert isinstance(payload, dict)
     assert payload.get("type") == "request"
     assert payload.get("target_node_id") == "did:coreason:node:a"
-    assert "requires approval" in payload.get("context_summary", "")
-    assert payload.get("proposed_action", {}).get("event_id") == intent.event_id
+
+    context_summary = payload.get("context_summary", "")
+    assert isinstance(context_summary, str)
+    assert "requires approval" in context_summary
+
+    proposed_action = payload.get("proposed_action", {})
+    assert isinstance(proposed_action, dict)
+    assert proposed_action.get("event_id") == intent.event_id
 
     # The kinetic plane should NOT have been called
     actuator_engine.execute.assert_not_called()
@@ -1268,8 +1274,8 @@ async def test_tick_intervention_policy_wait_for_receipt() -> None:
                 tool_name="existing_tool",
                 description="test",
                 input_schema={"type": "object", "properties": {}},
-                side_effects={"impacts_state": False, "mutates_external_systems": False},
-                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},
+                side_effects={"impacts_state": False, "mutates_external_systems": False},  # type: ignore[arg-type]
+                permissions={"network_access": False, "file_system_access": False, "allowed_domains": []},  # type: ignore[arg-type]
             )
         ],
     )
