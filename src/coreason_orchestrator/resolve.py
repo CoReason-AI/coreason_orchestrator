@@ -9,16 +9,16 @@
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
 from coreason_manifest.spec.ontology import (
-    AgentBidIntent,
     AgentNodeProfile,
-    AuctionState,
+    CouncilTopologyManifest,
     DAGTopologyManifest,
+    DigitalTwinTopologyManifest,
     EpistemicFlowStateReceipt,
     EpistemicLedgerState,
     EvolutionaryTopologyManifest,
     ObservationEvent,
+    SMPCTopologyManifest,
     SwarmTopologyManifest,
-    TaskAnnouncementIntent,
     WorkflowManifest,
 )
 
@@ -39,59 +39,21 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
     """
     topology = workflow.topology
 
-    # Swarm/Evolutionary Topology Handling
-    if isinstance(topology, SwarmTopologyManifest):
-        # Broadcast TaskAnnouncementIntent to gather bids
-        announcement = TaskAnnouncementIntent(
-            task_id="did:coreason:workflow",
-            required_action_space_id="did:coreason:default_action_space",
-            max_budget_magnitude=100,
+    # Advanced Topologies Handling
+    if isinstance(
+        topology,
+        (
+            SwarmTopologyManifest,
+            EvolutionaryTopologyManifest,
+            CouncilTopologyManifest,
+            SMPCTopologyManifest,
+            DigitalTwinTopologyManifest,
+        ),
+    ):
+        raise NotImplementedError(
+            f"Topology type '{topology.type}' is currently unsupported in this runtime phase. "
+            "Immediate roadmap resolution required."
         )
-
-        bids: list[AgentBidIntent] = []
-        agent_nodes: dict[str, AgentNodeProfile] = {
-            k: v for k, v in topology.nodes.items() if isinstance(v, AgentNodeProfile)
-        }
-
-        # In a fully decentralized system, agents would asynchronously emit bids.
-        # Here we deterministically aggregate bids from available nodes to satisfy the ontology.
-        for node_id, _node in sorted(agent_nodes.items()):
-            # Simulate a deterministic bid based on node identifier length for deterministic testing
-            bid_cost = len(str(node_id))
-            bids.append(
-                AgentBidIntent(
-                    agent_id=str(node_id),
-                    estimated_cost_magnitude=bid_cost,
-                    estimated_latency_ms=10,
-                    estimated_carbon_gco2eq=0.1,
-                    confidence_score=1.0 / (float(bid_cost) + 1.0),
-                )
-            )
-
-        if not bids:
-            return []
-
-        auction = AuctionState(
-            announcement=announcement, bids=bids, award=None, clearing_timeout=1, minimum_tick_size=0.1
-        )
-        # Assuming we sort bids to find the best (lowest cost / highest confidence)
-        auction.bids.sort(key=lambda b: (b.estimated_cost_magnitude, -b.confidence_score))
-        winning_bid = auction.bids[0]
-
-        winning_node = agent_nodes.get(winning_bid.agent_id)
-        return [winning_node] if winning_node else []
-
-    if isinstance(topology, EvolutionaryTopologyManifest):
-        # For evolutionary topology, select nodes based on the fitness objective proxy
-        # Since node capabilities are abstracted in this orchestrator tier, we rely on genetic culling limits
-        evo_agent_nodes: list[AgentNodeProfile] = []
-        for _k, v in sorted(topology.nodes.items()):
-            if isinstance(v, AgentNodeProfile):
-                evo_agent_nodes.append(v)
-
-        # Return up to the maximum population size allowed by the topology to breed the next generation
-        population_limit = topology.population_size
-        return evo_agent_nodes[:population_limit]
 
     # Only DAGTopologyManifest has explicit edges to traverse
     if not isinstance(topology, DAGTopologyManifest):

@@ -1,6 +1,7 @@
 from typing import Any
 
 import hypothesis.strategies as st
+import pytest
 
 # Copyright (c) 2026 CoReason, Inc.
 #
@@ -15,6 +16,7 @@ from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     CouncilTopologyManifest,
     DAGTopologyManifest,
+    DigitalTwinTopologyManifest,
     DynamicRoutingManifest,
     EpistemicFlowStateReceipt,
     EpistemicLedgerState,
@@ -22,6 +24,7 @@ from coreason_manifest.spec.ontology import (
     EvolutionaryTopologyManifest,
     FitnessObjectiveProfile,
     ObservationEvent,
+    SMPCTopologyManifest,
     SwarmTopologyManifest,
     SystemNodeProfile,
     WorkflowManifest,
@@ -299,13 +302,8 @@ def test_resolve_swarm_topology() -> None:
 
     ledger = EpistemicLedgerState(history=[])
 
-    resolved = resolve_current_node(workflow, ledger)
-
-    assert len(resolved) == 1
-    # 'a' has length 1. 'node_b_long' has length 11.
-    # Cost is based on length, so 'a' has cost 1, 'node_b_long' has 11.
-    # Winning bid should be lowest cost, so 'a' wins.
-    assert resolved[0] == node_a
+    with pytest.raises(NotImplementedError, match="Topology type 'swarm' is currently unsupported"):
+        resolve_current_node(workflow, ledger)
 
     # Coverage for empty bids
     topology_empty = SwarmTopologyManifest(
@@ -319,8 +317,9 @@ def test_resolve_swarm_topology() -> None:
         genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
         topology=topology_empty,
     )
-    resolved_empty = resolve_current_node(workflow_empty, ledger)
-    assert resolved_empty == []
+
+    with pytest.raises(NotImplementedError, match="Topology type 'swarm' is currently unsupported"):
+        resolve_current_node(workflow_empty, ledger)
 
 
 def test_resolve_evolutionary_topology() -> None:
@@ -352,12 +351,8 @@ def test_resolve_evolutionary_topology() -> None:
 
     ledger = EpistemicLedgerState(history=[])
 
-    resolved = resolve_current_node(workflow, ledger)
-
-    assert len(resolved) == 2
-    # Because of deterministic sorting: "did:coreason:n0", "did:coreason:n1" should be selected.
-    assert resolved[0] == nodes["did:coreason:n0"]
-    assert resolved[1] == nodes["did:coreason:n1"]
+    with pytest.raises(NotImplementedError, match="Topology type 'evolutionary' is currently unsupported"):
+        resolve_current_node(workflow, ledger)
 
 
 def test_resolve_current_node_empty_or_non_dag() -> None:
@@ -407,9 +402,71 @@ def test_resolve_current_node_non_dag() -> None:
         topology=topology,
     )
     ledger = EpistemicLedgerState(history=[])
+
+    with pytest.raises(NotImplementedError, match="Topology type 'council' is currently unsupported"):
+        resolve_current_node(workflow, ledger)
+
+
+def test_resolve_current_node_fallback() -> None:
+    class FakeTopologyManifest:
+        def __init__(self) -> None:
+            self.type = "fake"
+            self.nodes = {
+                "did:coreason:node:a": AgentNodeProfile(
+                    description="A", architectural_intent=".", justification=".", type="agent"
+                )
+            }
+
+    topology = FakeTopologyManifest()
+    workflow = WorkflowManifest.model_construct(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,  # type: ignore
+    )
+    ledger = EpistemicLedgerState(history=[])
+
     frontier = resolve_current_node(workflow, ledger)
     assert len(frontier) == 1
     assert frontier[0].description == "A"
+
+
+def test_resolve_smpc_topology() -> None:
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    topology = SMPCTopologyManifest.model_construct(
+        nodes={"did:coreason:node:a": node_a},
+        type="smpc",
+        smpc_protocol="secret_sharing",  # type: ignore[call-arg, arg-type]
+        joint_function_uri="did:coreason:func",  # type: ignore[call-arg]
+        participant_node_ids=["did:coreason:node:a"],  # type: ignore[call-arg]
+    )
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,
+    )
+    ledger = EpistemicLedgerState(history=[])
+
+    with pytest.raises(NotImplementedError, match="Topology type 'smpc' is currently unsupported"):
+        resolve_current_node(workflow, ledger)
+
+
+def test_resolve_digital_twin_topology() -> None:
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    topology = DigitalTwinTopologyManifest.model_construct(
+        nodes={"did:coreason:node:a": node_a},
+        type="digital_twin",
+        target_topology_id="did:coreason:target",  # type: ignore[call-arg]
+        convergence_sla="eventual",  # type: ignore[call-arg, arg-type]
+    )
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,
+    )
+    ledger = EpistemicLedgerState(history=[])
+
+    with pytest.raises(NotImplementedError, match="Topology type 'digital_twin' is currently unsupported"):
+        resolve_current_node(workflow, ledger)
 
 
 def test_resolve_current_node_empty_graph() -> None:

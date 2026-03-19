@@ -263,17 +263,38 @@ class CoreOrchestrator:
                             # FR-4.1: The Orchestrator MUST verify any requested ToolInvocationEvent
                             # against the allowed ActionSpaceManifest bound to the current node.
 
-                            # GAP-04: Graceful Fault Ledgering
-                            # Instead of crashing, synthesize a SystemFaultEvent and append it to the ledger.
+                            # Gap-04: Graceful Fault Ledgering
+                            # Instead of crashing, synthesize a System2RemediationIntent and append it to the ledger.
                             import time
+                            import uuid
 
-                            from coreason_manifest.spec.ontology import SystemFaultEvent
+                            from coreason_manifest.spec.ontology import System2RemediationIntent
 
-                            fault = EventFactory.build_event(
-                                SystemFaultEvent, timestamp=time.time(), type="system_fault"
+                            # Ensure we have a valid target node ID
+                            target_node_id = active_node_id
+                            if target_node_id == "unknown" and frontier_nodes:
+                                # Fallback to the first frontier node if active_node wasn't resolved
+                                # because the tool wasn't found in any action space.
+                                for node in frontier_nodes:
+                                    if hasattr(self.workflow.topology, "nodes"):
+                                        for n_id, n_obj in self.workflow.topology.nodes.items():
+                                            if n_obj is node:
+                                                target_node_id = str(n_id)
+                                                break
+                                    if target_node_id != "unknown":
+                                        break
+
+                            fault_intent = EventFactory.build_event(
+                                System2RemediationIntent,
+                                fault_id=f"fault_{uuid.uuid4().hex[:8]}",
+                                target_node_id=target_node_id,
+                                failing_pointers=["/tool_name"],
+                                remediation_prompt=f"Tool '{intent.tool_name}' is not authorized in the "
+                                "current ActionSpaceManifest.",
                             )
+
                             async with self._ledger_lock:
-                                self.ledger = append_event(self.ledger, fault)
+                                self.ledger = append_event(self.ledger, fault_intent)  # type: ignore[arg-type]
                         else:
                             # Intercept pending tools for InterventionPolicy evaluation
                             requires_intervention = False
