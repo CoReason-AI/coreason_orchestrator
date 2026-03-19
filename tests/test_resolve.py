@@ -19,7 +19,10 @@ from coreason_manifest.spec.ontology import (
     EpistemicFlowStateReceipt,
     EpistemicLedgerState,
     EpistemicProvenanceReceipt,
+    EvolutionaryTopologyManifest,
+    FitnessObjectiveProfile,
     ObservationEvent,
+    SwarmTopologyManifest,
     SystemNodeProfile,
     WorkflowManifest,
 )
@@ -274,6 +277,87 @@ def test_resolve_current_node_with_invalid_active_subgraphs() -> None:
     frontier = resolve_current_node(workflow, ledger)
     assert len(frontier) == 1
     assert frontier[0].description == "B1"
+
+
+def test_resolve_swarm_topology() -> None:
+    """Verifies that SwarmTopologyManifest routes to the best node deterministically based on generated bids."""
+    node_a = AgentNodeProfile(description="Shortest ID", type="agent", architectural_intent=".", justification=".")
+    node_b_long = AgentNodeProfile(description="Longer ID", type="agent", architectural_intent=".", justification=".")
+
+    topology = SwarmTopologyManifest(
+        type="swarm",
+        spawning_threshold=1,
+        max_concurrent_agents=5,
+        nodes={"did:coreason:short": node_a, "did:coreason:node_b_long": node_b_long},
+    )
+
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,
+    )
+
+    ledger = EpistemicLedgerState(history=[])
+
+    resolved = resolve_current_node(workflow, ledger)
+
+    assert len(resolved) == 1
+    # 'a' has length 1. 'node_b_long' has length 11.
+    # Cost is based on length, so 'a' has cost 1, 'node_b_long' has 11.
+    # Winning bid should be lowest cost, so 'a' wins.
+    assert resolved[0] == node_a
+
+    # Coverage for empty bids
+    topology_empty = SwarmTopologyManifest(
+        type="swarm",
+        spawning_threshold=1,
+        max_concurrent_agents=5,
+        nodes={},
+    )
+    workflow_empty = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology_empty,
+    )
+    resolved_empty = resolve_current_node(workflow_empty, ledger)
+    assert resolved_empty == []
+
+
+def test_resolve_evolutionary_topology() -> None:
+    """Verifies that EvolutionaryTopologyManifest culls to the population size."""
+    nodes: dict[str, AgentNodeProfile] = {
+        f"did:coreason:n{i}": AgentNodeProfile(
+            description=f"Node {i}", type="agent", architectural_intent=".", justification="."
+        )
+        for i in range(5)
+    }
+
+    fitness = FitnessObjectiveProfile(target_metric="cost", direction="minimize", weight=1.0)
+
+    topology = EvolutionaryTopologyManifest(
+        type="evolutionary",
+        generations=10,
+        population_size=2,
+        mutation={"mutation_rate": 0.1, "temperature_shift_variance": 0.5},  # type: ignore[arg-type]
+        crossover={"strategy_type": "single_point", "blending_factor": 0.5},  # type: ignore[arg-type]
+        fitness_objectives=[fitness],
+        nodes=dict(nodes),  # type: ignore[arg-type]
+    )
+
+    workflow = WorkflowManifest(
+        manifest_version="1.0.0",
+        genesis_provenance=EpistemicProvenanceReceipt(extracted_by="did:coreason:sys", source_event_id="dummy"),
+        topology=topology,
+    )
+
+    ledger = EpistemicLedgerState(history=[])
+
+    resolved = resolve_current_node(workflow, ledger)
+
+    assert len(resolved) == 2
+    # Because of deterministic sorting: "did:coreason:n0", "did:coreason:n1" should be selected.
+    assert resolved[0] == nodes["did:coreason:n0"]
+    assert resolved[1] == nodes["did:coreason:n1"]
 
 
 def test_resolve_current_node_empty_or_non_dag() -> None:

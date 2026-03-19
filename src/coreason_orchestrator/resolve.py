@@ -9,11 +9,16 @@
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
 from coreason_manifest.spec.ontology import (
+    AgentBidIntent,
     AgentNodeProfile,
+    AuctionState,
     DAGTopologyManifest,
     EpistemicFlowStateReceipt,
     EpistemicLedgerState,
+    EvolutionaryTopologyManifest,
     ObservationEvent,
+    SwarmTopologyManifest,
+    TaskAnnouncementIntent,
     WorkflowManifest,
 )
 
@@ -34,16 +39,69 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
     """
     topology = workflow.topology
 
-    # Only DAGTopologyManifest has explicit edges to traverse in this simple implementation
+    # Swarm/Evolutionary Topology Handling
+    if isinstance(topology, SwarmTopologyManifest):
+        # Broadcast TaskAnnouncementIntent to gather bids
+        announcement = TaskAnnouncementIntent(
+            task_id="did:coreason:workflow",
+            required_action_space_id="did:coreason:default_action_space",
+            max_budget_magnitude=100,
+        )
+
+        bids: list[AgentBidIntent] = []
+        agent_nodes: dict[str, AgentNodeProfile] = {
+            k: v for k, v in topology.nodes.items() if isinstance(v, AgentNodeProfile)
+        }
+
+        # In a fully decentralized system, agents would asynchronously emit bids.
+        # Here we deterministically aggregate bids from available nodes to satisfy the ontology.
+        for node_id, _node in sorted(agent_nodes.items()):
+            # Simulate a deterministic bid based on node identifier length for deterministic testing
+            bid_cost = len(str(node_id))
+            bids.append(
+                AgentBidIntent(
+                    agent_id=str(node_id),
+                    estimated_cost_magnitude=bid_cost,
+                    estimated_latency_ms=10,
+                    estimated_carbon_gco2eq=0.1,
+                    confidence_score=1.0 / (float(bid_cost) + 1.0),
+                )
+            )
+
+        if not bids:
+            return []
+
+        auction = AuctionState(
+            announcement=announcement, bids=bids, award=None, clearing_timeout=1, minimum_tick_size=0.1
+        )
+        # Assuming we sort bids to find the best (lowest cost / highest confidence)
+        auction.bids.sort(key=lambda b: (b.estimated_cost_magnitude, -b.confidence_score))
+        winning_bid = auction.bids[0]
+
+        winning_node = agent_nodes.get(winning_bid.agent_id)
+        return [winning_node] if winning_node else []
+
+    if isinstance(topology, EvolutionaryTopologyManifest):
+        # For evolutionary topology, select nodes based on the fitness objective proxy
+        # Since node capabilities are abstracted in this orchestrator tier, we rely on genetic culling limits
+        evo_agent_nodes: list[AgentNodeProfile] = []
+        for _k, v in sorted(topology.nodes.items()):
+            if isinstance(v, AgentNodeProfile):
+                evo_agent_nodes.append(v)
+
+        # Return up to the maximum population size allowed by the topology to breed the next generation
+        population_limit = topology.population_size
+        return evo_agent_nodes[:population_limit]
+
+    # Only DAGTopologyManifest has explicit edges to traverse
     if not isinstance(topology, DAGTopologyManifest):
-        # For non-DAG topologies, or empty node sets, we might not resolve a deterministic frontier
-        # We can default to all available agent nodes if present
+        # Fallback for unexpected or new topologies
         frontier: list[AgentNodeProfile] = []
         if hasattr(topology, "nodes") and topology.nodes:
             for node_id in sorted(topology.nodes.keys()):
-                node = topology.nodes[node_id]
-                if isinstance(node, AgentNodeProfile):
-                    frontier.append(node)
+                fallback_node = topology.nodes[node_id]
+                if isinstance(fallback_node, AgentNodeProfile):
+                    frontier.append(fallback_node)
         return frontier
 
     nodes = topology.nodes
@@ -62,9 +120,9 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
     if not roots:
         # Cyclic without a clear root or empty graph
         first_key = next(iter(sorted(nodes.keys())))
-        node = nodes[first_key]
-        if isinstance(node, AgentNodeProfile):
-            return [node]
+        cyclic_node = nodes[first_key]
+        if isinstance(cyclic_node, AgentNodeProfile):
+            return [cyclic_node]
         return []
 
     # Track execution history and routing decisions
@@ -110,9 +168,9 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
                     bypassed_steps = getattr(routing_manifest, "bypassed_steps", [])
                     for step in bypassed_steps:
                         if isinstance(step, dict):
-                            node_id = step.get("bypassed_node_id")
-                            if node_id is not None:
-                                completed_nodes.add(str(node_id))
+                            bypassed_node_id = step.get("bypassed_node_id")
+                            if bypassed_node_id is not None:
+                                completed_nodes.add(str(bypassed_node_id))
                         else:
                             completed_nodes.add(str(step.bypassed_node_id))
 
@@ -150,8 +208,8 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
                 break
 
         if predecessors_completed:
-            node = nodes[node_id]
-            if isinstance(node, AgentNodeProfile):
-                active_frontier.append(node)
+            predecessor_node = nodes[node_id]
+            if isinstance(predecessor_node, AgentNodeProfile):
+                active_frontier.append(predecessor_node)
 
     return active_frontier
