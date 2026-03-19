@@ -8,128 +8,20 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
 
-from pathlib import Path
-from typing import Any
-from unittest.mock import patch
+import asyncio
+import json
+from unittest.mock import MagicMock, patch
 
-
-def test_logger_directory_creation(tmp_path: Path) -> None:
-    """Verify that the logger creates the logs directory if it does not exist."""
-
-    # We monkeypatch the logs path to a temporary directory so we can safely test its creation
-    # Since logger.py has top-level execution, we need to mock it properly
-    import coreason_orchestrator.utils.logger as log_module
-
-    # Let's read the logger.py content, replace 'logs' with temp path, and execute it
-    logger_path = Path(log_module.__file__)
-    content = logger_path.read_text()
-
-    # Replace 'logs' path string with our temporary test directory path
-    test_logs_path = tmp_path / "test_logs"
-    test_logs_str = test_logs_path.as_posix()
-    content = content.replace('"logs"', f'"{test_logs_str}"')
-    content = content.replace('"logs/app.log"', f'"{test_logs_str}/app.log"')
-
-    # Ensure it doesn't exist before test
-    assert not test_logs_path.exists()
-
-    # Execute the module content in a dummy namespace
-    dummy_namespace: dict[str, Any] = {}
-    exec(content, dummy_namespace)  # noqa: S102
-
-    # Assert directory was created
-    assert test_logs_path.exists()
-    assert test_logs_path.is_dir()
-
-    # Clean up handlers if any were added
-    if "logger" in dummy_namespace:
-        dummy_namespace["logger"].remove()
+import pytest
 
 
 def test_logger_coverage_import() -> None:
     """Ensure the file is imported for full coverage."""
-    # Ensure logs dir exists for normal import to work
-    Path("logs").mkdir(exist_ok=True)
     import coreason_orchestrator.utils.logger  # noqa: F401
-
-
-def test_logger_coverage_import_when_dir_not_exists(tmp_path: Path) -> None:
-    """Force execution of the `if not log_path.exists(): log_path.mkdir()` line directly on the real module."""
-    # The file has module-level execution, so mocking Path globally isn't taking effect
-    # correctly via reload. Instead, let's use the same string execution approach
-    # we use in test_logger_directory_creation but explicitly mock out `logger.add` and
-    # ensure we hit the `log_path.mkdir()` line by substituting the log path with
-    # a mocked Path object or simply a new temp path.
-
-    import coreason_orchestrator.utils.logger as log_module
-
-    # Since we just want to execute the mkdir line, we can just replace 'logs' with a fake
-    # path string that doesn't exist and watch it get created to test that line.
-    logger_path = Path(log_module.__file__)
-    content = logger_path.read_text()
-
-    # Provide a path that definitely does not exist
-    test_logs_path = tmp_path / "coverage_test_logs"
-    test_logs_str = test_logs_path.as_posix()
-    content = content.replace('"logs"', f'"{test_logs_str}"')
-    content = content.replace('"logs/app.log"', f'"{test_logs_str}/app.log"')
-
-    # Mock logger to do nothing to avoid any weird file handle locks
-    mock_str = "from unittest.mock import MagicMock\nlogger = MagicMock()\n"
-    content = mock_str + content.replace("from loguru import logger", "")
-
-    assert not test_logs_path.exists()
-
-    dummy_namespace: dict[str, Any] = {}
-    exec(content, dummy_namespace)  # noqa: S102
-
-    # Verify that the directory was created via execution of that line
-    assert test_logs_path.exists()
-    assert test_logs_path.is_dir()
-
-    # Import the actual module again to register it in coverage without the magic mock.
-    # We do this by ensuring the original directory does not exist for a brief moment.
-    # We do this in a safe cross-platform way.
-    import sys
-
-    if "coreason_orchestrator.utils.logger" in sys.modules:
-        del sys.modules["coreason_orchestrator.utils.logger"]
-
-    import sys
-
-    if "coreason_orchestrator.utils.logger" in sys.modules:
-        del sys.modules["coreason_orchestrator.utils.logger"]
-
-    # To pass coverage on `log_path.mkdir(parents=True, exist_ok=True)`, we must
-    # mock `Path` but doing so effectively during a reload requires patching the target
-    # module directly right before reload, but sometimes that gets reset.
-    # Instead, we will use a tempfile patch strategy in a separate test function
-    # to avoid state contamination.
-
-
-def test_logger_coverage_mkdir(tmp_path: Path, monkeypatch: Any) -> None:
-    """Force execution of the `if not log_path.exists(): log_path.mkdir()` line for coverage."""
-    import sys
-
-    test_logs_dir = tmp_path / "logs"
-
-    # We change the current working directory to the temporary path!
-    # Because `Path("logs")` is relative to cwd, changing cwd means it creates it in `tmp_path`.
-    monkeypatch.chdir(tmp_path)
-
-    # Ensure module is cleared
-    if "coreason_orchestrator.utils.logger" in sys.modules:
-        del sys.modules["coreason_orchestrator.utils.logger"]
-
-    with patch("loguru.logger.add"), patch("loguru.logger.remove"):
-        import coreason_orchestrator.utils.logger  # noqa: F401
-
-    assert test_logs_dir.exists()
 
 
 def test_serialize_to_log_event() -> None:
     """Verifies that the custom loguru serializer correctly formats LogEvent."""
-    import json
     from unittest.mock import MagicMock
 
     from coreason_orchestrator.utils.logger import _serialize_to_log_event
@@ -150,3 +42,122 @@ def test_serialize_to_log_event() -> None:
     assert parsed["level"] == "ERROR"
     assert parsed["message"] == "test error message"
     assert parsed["context_profile"] == {"trace_id": "123"}
+
+
+@pytest.mark.asyncio
+async def test_async_telemetry_sink_batching() -> None:
+    """Verifies that AsyncTelemetrySink batches logs and flushes correctly."""
+    from coreason_orchestrator.utils.logger import AsyncTelemetrySink
+
+    sink = AsyncTelemetrySink(endpoint="http://mock-endpoint/v1/logs", batch_size=2)
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_response = MagicMock()
+        mock_response.status = 200
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        # Write first log, should not flush
+        await sink.write('{"log": 1}\n')
+        mock_urlopen.assert_not_called()
+
+        # Write second log, should trigger batch flush
+        await sink.write('{"log": 2}\n')
+
+        # Allow time for async event loop tasks
+        await asyncio.sleep(0.01)
+
+        mock_urlopen.assert_called_once()
+        req_arg = mock_urlopen.call_args[0][0]
+        assert req_arg.full_url == "http://mock-endpoint/v1/logs"
+        assert req_arg.data == b'{"log": 1}\n{"log": 2}\n'
+
+    # Cancel the background flush task
+    import contextlib
+
+    if sink._flush_task:
+        sink._flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sink._flush_task
+
+
+@pytest.mark.asyncio
+async def test_async_telemetry_sink_timer_flush() -> None:
+    """Verifies that the background timer periodically flushes logs."""
+    from coreason_orchestrator.utils.logger import AsyncTelemetrySink
+
+    sink = AsyncTelemetrySink(endpoint="http://mock-endpoint/v1/logs", batch_size=10)
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        await sink.write('{"log": "stale"}\n')
+
+        mock_urlopen.assert_not_called()
+
+        # Sleep enough to trigger the 1.0s background timer
+        await asyncio.sleep(1.05)
+
+        mock_urlopen.assert_called_once()
+        req_arg = mock_urlopen.call_args[0][0]
+        assert req_arg.data == b'{"log": "stale"}\n'
+
+    # Cancel task
+    import contextlib
+
+    if sink._flush_task:
+        sink._flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sink._flush_task
+
+
+@pytest.mark.asyncio
+async def test_async_telemetry_sink_cancellation_flush() -> None:
+    """Verifies coverage when cancelling the background task."""
+    from coreason_orchestrator.utils.logger import AsyncTelemetrySink
+
+    sink = AsyncTelemetrySink(endpoint="http://mock-endpoint/v1/logs", batch_size=10)
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        await sink.write('{"log": "cancelled"}\n')
+
+        # Cancel the task immediately
+        import contextlib
+
+        if sink._flush_task:
+            sink._flush_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sink._flush_task
+
+        # Coverage for empty list early exit in _flush_current_batch
+        sink._batch.clear()
+        await sink._flush_current_batch()
+        assert mock_urlopen.call_count == 0  # No additional calls
+
+
+@pytest.mark.asyncio
+async def test_async_telemetry_sink_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    """Verifies that AsyncTelemetrySink handles HTTP failures gracefully."""
+    from coreason_orchestrator.utils.logger import AsyncTelemetrySink
+
+    sink = AsyncTelemetrySink(endpoint="http://mock-endpoint/v1/logs", batch_size=1)
+
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        mock_urlopen.side_effect = Exception("Connection refused")
+
+        # The write will flush since batch_size=1
+        await sink.write('{"test": "fail"}\n')
+
+        # Wait for thread execution
+        await asyncio.sleep(0.01)
+
+        mock_urlopen.assert_called_once()
+
+    # Exception should be printed to stderr
+    captured = capsys.readouterr()
+    assert "Telemetry export failed: Connection refused" in captured.err
+
+    # Cleanup task
+    import contextlib
+
+    if sink._flush_task:
+        sink._flush_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sink._flush_task
