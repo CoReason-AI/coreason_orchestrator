@@ -831,3 +831,128 @@ def test_init_without_workflow() -> None:
     )
 
     assert orchestrator.workflow is None
+
+
+@pytest.mark.asyncio
+async def test_tick_delegate_cognitive_plane_node_id_resolution() -> None:
+    node_a = AgentNodeProfile(description="A", architectural_intent=".", justification=".", type="agent")
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    # Mock return value for generate_intent
+
+    from coreason_manifest.spec.ontology import ObservationEvent
+
+    mock_event = ObservationEvent.model_construct(event_id="test", timestamp=1.0, type="observation", payload={})
+    from coreason_manifest.spec.ontology import TokenBurnReceipt
+
+    mock_burn = TokenBurnReceipt.model_construct(
+        event_id="burn",
+        timestamp=1.0,
+        type="token_burn",
+        tool_invocation_id="test",
+        input_tokens=0,
+        output_tokens=0,
+        burn_magnitude=0,
+    )
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
+
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    result = await orchestrator.tick()
+    assert result is True
+    # wait for tasks to finish
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    inference_engine.generate_intent.assert_called_once()
+    args = inference_engine.generate_intent.call_args[0]
+    assert args[0] is node_a
+    assert args[1] is ledger
+    assert args[2] == "did:coreason:node:a"
+    assert args[3].action_space_id == "default"
+
+
+@pytest.mark.asyncio
+async def test_tick_delegate_cognitive_plane_node_action_space_resolution() -> None:
+    node_a = AgentNodeProfile(
+        description="A", architectural_intent=".", justification=".", type="agent", action_space_id="custom_space"
+    )
+    workflow = get_mock_workflow()
+    new_topo = workflow.topology.model_copy(update={"nodes": {"did:coreason:node:a": node_a}})
+    workflow = workflow.model_copy(update={"topology": new_topo})
+
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    # Mock return value for generate_intent
+
+    from coreason_manifest.spec.ontology import ObservationEvent
+
+    mock_event = ObservationEvent.model_construct(event_id="test", timestamp=1.0, type="observation", payload={})
+    from coreason_manifest.spec.ontology import TokenBurnReceipt
+
+    mock_burn = TokenBurnReceipt.model_construct(
+        event_id="burn",
+        timestamp=1.0,
+        type="token_burn",
+        tool_invocation_id="test",
+        input_tokens=0,
+        output_tokens=0,
+        burn_magnitude=0,
+    )
+    inference_engine.generate_intent.return_value = (mock_event, mock_burn, None, None)
+
+    actuator_engine = AsyncMock()
+
+    custom_space = ActionSpaceManifest(action_space_id="custom_space", native_tools=[])
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+        action_space_registry={"custom_space": custom_space},
+    )
+
+    result = await orchestrator.tick()
+    assert result is True
+    import asyncio
+
+    await asyncio.sleep(0.1)
+
+    inference_engine.generate_intent.assert_called_once()
+    args = inference_engine.generate_intent.call_args[0]
+    assert args[3] is custom_space
+
+
+@pytest.mark.asyncio
+async def test_run_event_loop_natural_exit() -> None:
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+
+    # Mock tick to return False on the first call to simulate natural exit
+    orchestrator.tick = AsyncMock(return_value=False)  # type: ignore
+
+    result_ledger = await orchestrator.run_event_loop()
+
+    assert result_ledger is orchestrator.ledger
