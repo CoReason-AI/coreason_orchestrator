@@ -78,6 +78,21 @@ def test_append_event_observation() -> None:
 
     event = ObservationEvent(event_id="o1", timestamp=3.0, type="observation", payload={"key": "value"})
 
+    import unittest.mock
+
+    # To test max_loops inner break without mutating the frozen object, we patch getattr in ledger.py
+    # We set max_loops to 0, so the loops counter matches it on the first iteration and breaks
+    def mock_getattr_loop0(_obj: object, name: str, default: int) -> int:
+        return 0 if name == "max_loops" else default
+
+    with unittest.mock.patch("coreason_orchestrator.ledger.getattr", side_effect=mock_getattr_loop0):
+        # Create a dummy observation to put in history so the inner loop runs once and hits the break
+        dummy_event = ObservationEvent(event_id="o0", timestamp=1.0, type="observation", payload={})
+        ledger_with_dummy = EpistemicLedgerState(history=[dummy_event])  # inner loop will run and break
+        new_ledger_mock_loop = append_event(ledger_with_dummy, event)
+        manifest_mock_loop = new_ledger_mock_loop.history[-1]
+        assert isinstance(manifest_mock_loop, ObservationEvent)
+
     new_ledger = append_event(ledger, event)
     assert len(new_ledger.history) == 1
     assert isinstance(new_ledger.history[0], ObservationEvent)
@@ -99,6 +114,120 @@ def test_append_event_hypothesis(payload: dict[str, Any]) -> None:
     assert isinstance(new_event, ObservationEvent)
     assert new_event.event_id != "placeholder"
     assert new_event.event_id == calculate_event_hash(event.model_dump(exclude={"event_id"}))
+
+
+def test_append_event_automated_truth_maintenance() -> None:
+    """Verifies that an event with falsified_node_id automatically synthesizes a cascade."""
+    from coreason_manifest.spec.ontology import BeliefMutationEvent
+
+    # Pre-populate ledger with BeliefMutationEvent carrying embedded edges in payload
+    past_event = BeliefMutationEvent(
+        event_id="bm1",
+        timestamp=1.0,
+        type="belief_mutation",
+        payload={
+            "embedded_edges": [
+                {
+                    "edge_id": "edge1",
+                    "subject_node_id": "bad_node",
+                    "object_node_id": "other_node",
+                    "confidence_score": 0.9,
+                    "predicate": "test",
+                },
+                {
+                    "edge_id": "edge2",
+                    "subject_node_id": "other_node",
+                    "object_node_id": "bad_node",
+                    "confidence_score": 0.9,
+                    "predicate": "test",
+                },
+                {
+                    "edge_id": "edge_safe",
+                    "subject_node_id": "good_node",
+                    "object_node_id": "safe_node",
+                    "confidence_score": 0.9,
+                    "predicate": "test",
+                },
+            ]
+        },
+    )
+
+    ledger = EpistemicLedgerState(history=[past_event])
+
+    # Create the contradicting ObservationEvent
+    event = ObservationEvent(
+        event_id="o1", timestamp=3.0, type="observation", payload={"falsified_node_id": "bad_node"}
+    )
+
+    new_ledger = append_event(ledger, event)
+
+    # Original length was 1. We appended the observation (1) and the auto-synthesized StateDifferentialManifest (1).
+    # So new length should be 3.
+    assert len(new_ledger.history) == 3
+
+    # The last event should be the state differential manifest
+    manifest = new_ledger.history[-1]
+    assert isinstance(manifest, StateDifferentialManifest)
+
+    # Verify the cascade quarantined edge1 and edge2 but NOT edge_safe
+    cascade_patch = manifest.patches[1]
+    assert cascade_patch.op == "add"
+    assert cascade_patch.path == "/active_cascades/-"
+
+    # Re-instantiate cascade from patch value
+    cascade = DefeasibleCascadeEvent.model_validate(cascade_patch.value)
+    assert cascade.root_falsified_event_id == "bad_node"
+    assert "edge1" in cascade.quarantined_event_ids
+    assert "edge2" in cascade.quarantined_event_ids
+    assert "edge_safe" not in cascade.quarantined_event_ids
+
+    import unittest.mock
+
+    # To test max_loops inner break without mutating the frozen object, we patch getattr in ledger.py
+    # We set max_loops to 1, so the loops counter matches it on the first iteration and breaks
+    def mock_getattr_loop1(_obj: object, name: str, default: int) -> int:
+        return 1 if name == "max_loops" else default
+
+    with unittest.mock.patch("coreason_orchestrator.ledger.getattr", side_effect=mock_getattr_loop1):
+        new_ledger_mock_loop = append_event(ledger, event)
+        manifest_mock_loop = new_ledger_mock_loop.history[-1]
+        assert isinstance(manifest_mock_loop, ObservationEvent)
+
+    # Provide a belief with no embedded_edges for line coverage (tests continue path)
+    dummy_event_empty_belief = BeliefMutationEvent(event_id="bm0", timestamp=1.0, type="belief_mutation", payload={})
+    ledger_with_dummy_belief = EpistemicLedgerState(history=[dummy_event_empty_belief])
+    append_event(ledger_with_dummy_belief, event)
+
+    # Provide an event with "falsified_node_id" mapped to a non-string payload for line coverage
+    event_non_string = ObservationEvent(
+        event_id="o2", timestamp=3.0, type="observation", payload={"falsified_node_id": 123}
+    )
+    append_event(ledger, event_non_string)
+
+    # Provide an event where the falsified_node_id equals the currently visited node
+    event_loop_cycle = ObservationEvent(
+        event_id="o3", timestamp=4.0, type="observation", payload={"falsified_node_id": "bad_node"}
+    )
+    # Re-insert the same node in the next_queue to trigger the `continue` block
+    # We can do this by having a BeliefMutationEvent with an edge targeting the "bad_node" itself
+    loop_event = BeliefMutationEvent(
+        event_id="bm_loop",
+        timestamp=1.0,
+        type="belief_mutation",
+        payload={
+            "embedded_edges": [
+                {
+                    "edge_id": "edge_loop",
+                    "subject_node_id": "bad_node",
+                    "object_node_id": "bad_node",
+                    "confidence_score": 0.9,
+                    "predicate": "test",
+                }
+            ]
+        },
+    )
+    ledger_with_loop = EpistemicLedgerState(history=[loop_event])
+    append_event(ledger_with_loop, event_loop_cycle)
 
 
 def test_apply_rollback_basic() -> None:
