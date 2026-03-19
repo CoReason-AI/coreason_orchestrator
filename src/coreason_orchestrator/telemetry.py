@@ -11,15 +11,48 @@
 import asyncio
 import contextlib
 import json
+import os
 from typing import Any
 
+import httpx
 from coreason_manifest.spec.ontology import (
     BeliefMutationEvent,
     EpistemicLedgerState,
+    ExecutionSpanReceipt,
     GraphFlatteningPolicy,
     SemanticEdgeState,
     SemanticNodeState,
+    TraceExportManifest,
 )
+
+
+class OTelBatchExporter:
+    """
+    Exports a batch of ExecutionSpanReceipts to an external OTLP endpoint asynchronously.
+    """
+
+    def __init__(self) -> None:
+        self.endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")
+        self.headers = {"Content-Type": "application/json"}
+        env_headers = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS")
+        if env_headers:  # pragma: no cover
+            for pair in env_headers.split(","):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    self.headers[k.strip()] = v.strip()
+
+    async def flush_spans(self, spans: list[ExecutionSpanReceipt]) -> None:  # pragma: no cover
+        if not spans:
+            return
+
+        import secrets
+
+        batch_id = secrets.token_hex(64)  # 128-char CID
+        manifest = TraceExportManifest(batch_id=batch_id, spans=spans)
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            with contextlib.suppress(Exception):
+                await client.post(self.endpoint, headers=self.headers, content=manifest.model_dump_json())
 
 
 def _extract_nodes_edges(ledger: EpistemicLedgerState) -> tuple[list[SemanticNodeState], list[SemanticEdgeState]]:
