@@ -700,13 +700,17 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
 
     result = await orchestrator.tick()
     # Print debug info
-    print(f"Ledger history after tick: {[e.type for e in orchestrator.ledger.history]}")
+    print(f"Ledger history after tick: {[getattr(e, 'type', type(e).__name__) for e in orchestrator.ledger.history]}")
 
     assert result is True
-    # Verify a SystemFaultEvent was appended to the ledger
-    from coreason_manifest.spec.ontology import SystemFaultEvent
+    # Verify a System2RemediationIntent was appended to the ledger
+    from coreason_manifest.spec.ontology import System2RemediationIntent
 
-    assert isinstance(orchestrator.ledger.history[-1], SystemFaultEvent)
+    last_event = orchestrator.ledger.history[-1]
+    assert isinstance(last_event, System2RemediationIntent)
+    assert last_event.target_node_id == "did:coreason:node:a"
+    assert last_event.failing_pointers == ["/tool_name"]
+    assert "missing_tool" in last_event.remediation_prompt
 
 
 @pytest.mark.asyncio
