@@ -16,6 +16,7 @@ from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     BargeInInterruptEvent,
     EpistemicLedgerState,
+    InterventionIntent,
     ObservationEvent,
     TokenBurnReceipt,
     ToolInvocationEvent,
@@ -266,10 +267,7 @@ class CoreOrchestrator:
                             # Instead of crashing, synthesize a SystemFaultEvent and append it to the ledger.
                             import time
 
-                            from coreason_manifest.spec.ontology import (
-                                InterventionIntent,
-                                SystemFaultEvent,
-                            )
+                            from coreason_manifest.spec.ontology import SystemFaultEvent
 
                             fault = EventFactory.build_event(
                                 SystemFaultEvent, timestamp=time.time(), type="system_fault"

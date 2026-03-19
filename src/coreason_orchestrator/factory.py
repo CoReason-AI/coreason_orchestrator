@@ -81,7 +81,7 @@ class EventFactory:
         temp_event = event_class.model_construct(**processed_kwargs)
 
         # Calculate the deterministic hash from the securely coerced and defaulted payload
-        event_hash = calculate_event_hash(temp_event.model_dump(exclude={id_field}, exclude_none=False))
+        event_hash = calculate_event_hash(temp_event.model_dump(mode="json", exclude={id_field}, exclude_none=False))
 
         final_kwargs = dict(kwargs)
 
