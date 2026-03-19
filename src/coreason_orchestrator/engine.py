@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 # Copyright (c) 2026 CoReason, Inc.
 #
@@ -16,6 +17,7 @@ from coreason_manifest.spec.ontology import (
     AgentNodeProfile,
     BargeInInterruptEvent,
     EpistemicLedgerState,
+    ExecutionSpanReceipt,
     InterventionIntent,
     ObservationEvent,
     TokenBurnReceipt,
@@ -28,6 +30,7 @@ from coreason_orchestrator.factory import EventFactory
 from coreason_orchestrator.interfaces import ActuatorEngineProtocol, InferenceEngineProtocol
 from coreason_orchestrator.ledger import append_event
 from coreason_orchestrator.resolve import resolve_current_node
+from coreason_orchestrator.telemetry import OTelBatchExporter
 
 
 class CoreOrchestrator:
@@ -62,6 +65,7 @@ class CoreOrchestrator:
         self.action_space_registry = action_space_registry or {}
         self._ledger_lock = asyncio.Lock()
         self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
+        self.exporter = OTelBatchExporter()
 
     async def inject_observation(self, user_input: str) -> None:
         """Injects an interactive user observation directly into the ledger."""
@@ -430,6 +434,33 @@ class CoreOrchestrator:
 
         listener_task = asyncio.create_task(_listen_for_interrupts())
 
+        async def _observability_worker() -> None:  # pragma: no cover
+            """
+            Background micro-batching task to sweep the ledger for ExecutionSpanReceipts
+            and flush them out securely via OTelBatchExporter without blocking main logic.
+            """
+            last_processed_idx = len(self.ledger.history)
+            while True:
+                await asyncio.sleep(5.0)
+                try:
+                    current_idx = len(self.ledger.history)
+                    if current_idx > last_processed_idx:
+                        new_events = self.ledger.history[last_processed_idx:current_idx]
+                        last_processed_idx = current_idx
+                        new_spans: list[ExecutionSpanReceipt] = []
+                        for event in new_events:
+                            if isinstance(event, ExecutionSpanReceipt):
+                                new_spans.append(event)  # noqa: PERF401
+                        if new_spans:
+                            await self.exporter.flush_spans(new_spans)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # pragma: no cover
+                    # Swallow exceptions to not crash the background worker
+                    logging.getLogger("coreason.orchestrator.telemetry").warning(f"Failed to flush spans: {e}")
+
+        observability_task = asyncio.create_task(_observability_worker())
+
         try:
             while True:
                 has_work = await self.tick()
@@ -453,5 +484,7 @@ class CoreOrchestrator:
             # Prevent the listener from hanging around after natural loop completion
             if not listener_task.done():
                 listener_task.cancel()
+            if not observability_task.done():
+                observability_task.cancel()
 
         return self.ledger
