@@ -349,6 +349,7 @@ class CoreOrchestrator:
                                     # Synthesize InterventionIntent
                                     dumped = intent.model_dump()
                                     from coreason_manifest.spec.ontology import JsonPrimitiveState
+
                                     proposed_action: dict[str, JsonPrimitiveState] = dict(dumped)  # type: ignore[arg-type]
 
                                     intervention_intent = EventFactory.build_event(

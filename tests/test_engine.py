@@ -844,14 +844,19 @@ async def test_append_to_ledger() -> None:
         inference_engine=inference_engine,
         actuator_engine=actuator_engine,
     )
-    from coreason_manifest.spec.ontology import System2RemediationIntent, ManifestViolationReceipt
+    from coreason_manifest.spec.ontology import ManifestViolationReceipt, System2RemediationIntent
+
     from coreason_orchestrator.factory import EventFactory
 
     intent = EventFactory.build_event(
         System2RemediationIntent,
         fault_id="fault-123",
         target_node_id="did:coreason:orchestrator",
-        violation_receipts=[ManifestViolationReceipt(diagnostic_message="test", failing_pointer="/test", violation_type="ontology_mismatch")],
+        violation_receipts=[
+            ManifestViolationReceipt(
+                diagnostic_message="test", failing_pointer="/test", violation_type="ontology_mismatch"
+            )
+        ],
     )
 
     await orchestrator.append_to_ledger(intent)
