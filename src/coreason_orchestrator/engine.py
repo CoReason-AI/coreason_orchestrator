@@ -15,6 +15,8 @@ import time
 from coreason_manifest.spec.ontology import (
     ActionSpaceManifest,
     AgentNodeProfile,
+    AnyIntent,
+    AnyStateEvent,
     BargeInInterruptEvent,
     EpistemicLedgerState,
     ExecutionSpanReceipt,
@@ -66,6 +68,16 @@ class CoreOrchestrator:
         self._ledger_lock = asyncio.Lock()
         self.interrupt_queue: asyncio.Queue[tuple[BargeInInterruptEvent, str]] = asyncio.Queue()
         self.exporter = OTelBatchExporter()
+
+    async def append_to_ledger(self, event: AnyStateEvent | AnyIntent) -> None:
+        """
+        Public API for safely mutating the epistemic ledger state.
+
+        Takes an AnyStateEvent or AnyIntent and safely appends it mathematically
+        bound to the ledger history behind the internal concurrency lock.
+        """
+        async with self._ledger_lock:
+            self.ledger = append_event(self.ledger, event)
 
     async def inject_observation(self, user_input: str) -> None:
         """Injects an interactive user observation directly into the ledger."""
@@ -306,7 +318,7 @@ class CoreOrchestrator:
                             )
 
                             async with self._ledger_lock:
-                                self.ledger = append_event(self.ledger, fault_intent)  # type: ignore[arg-type]
+                                self.ledger = append_event(self.ledger, fault_intent)
                         else:
                             # Intercept pending tools for InterventionPolicy evaluation
                             requires_intervention = False
@@ -336,12 +348,9 @@ class CoreOrchestrator:
                                 if not intent_already_emitted:
                                     # Synthesize InterventionIntent
                                     dumped = intent.model_dump()
-                                    proposed_action: dict[str, str | int | float | bool | None] = {}
-                                    for k, v in dumped.items():
-                                        if isinstance(v, (str, int, float, bool, type(None))):
-                                            proposed_action[k] = v
-                                        else:
-                                            proposed_action[k] = json.dumps(v)
+                                    from coreason_manifest.spec.ontology import JsonPrimitiveState
+
+                                    proposed_action: dict[str, JsonPrimitiveState] = dict(dumped)  # type: ignore[arg-type]
 
                                     intervention_intent = EventFactory.build_event(
                                         InterventionIntent,
