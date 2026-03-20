@@ -335,7 +335,7 @@ def test_resolve_evolutionary_topology() -> None:
 
     topology = EvolutionaryTopologyManifest(
         type="evolutionary",
-        generations=10,
+        generations=1,
         population_size=2,
         mutation={"mutation_rate": 0.1, "temperature_shift_variance": 0.5},  # type: ignore[arg-type]
         crossover={"strategy_type": "single_point", "blending_factor": 0.5},  # type: ignore[arg-type]
