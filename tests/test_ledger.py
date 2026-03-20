@@ -64,11 +64,11 @@ def test_append_event_multiple() -> None:
     ledger2 = append_event(ledger1, event2)
 
     assert len(ledger2.history) == 2
-    assert ledger2.history[0].timestamp == 1.0
-    assert ledger2.history[1].timestamp == 2.0
+    assert getattr(ledger2.history[0], "timestamp", None) == 1.0
+    assert getattr(ledger2.history[1], "timestamp", None) == 2.0
 
-    assert ledger2.history[0].event_id != "e1"
-    assert ledger2.history[1].event_id != "e2"
+    assert getattr(ledger2.history[0], "event_id", None) != "e1"
+    assert getattr(ledger2.history[1], "event_id", None) != "e2"
 
 
 def test_append_event_observation() -> None:

@@ -832,6 +832,33 @@ def test_dump_partial_state() -> None:
     assert result is ledger
 
 
+@pytest.mark.asyncio
+async def test_append_to_ledger() -> None:
+    workflow = get_mock_workflow()
+    ledger = EpistemicLedgerState(history=[])
+    inference_engine = AsyncMock()
+    actuator_engine = AsyncMock()
+    orchestrator = CoreOrchestrator(
+        workflow=workflow,
+        ledger=ledger,
+        inference_engine=inference_engine,
+        actuator_engine=actuator_engine,
+    )
+    from coreason_manifest.spec.ontology import System2RemediationIntent, ManifestViolationReceipt
+    from coreason_orchestrator.factory import EventFactory
+
+    intent = EventFactory.build_event(
+        System2RemediationIntent,
+        fault_id="fault-123",
+        target_node_id="did:coreason:orchestrator",
+        violation_receipts=[ManifestViolationReceipt(diagnostic_message="test", failing_pointer="/test", violation_type="ontology_mismatch")],
+    )
+
+    await orchestrator.append_to_ledger(intent)
+    assert len(orchestrator.ledger.history) > 0
+    assert orchestrator.ledger.history[-1] == intent
+
+
 def test_init_without_workflow() -> None:
     """Verifies orchestrator can instantiate without a workflow (None)."""
     ledger = EpistemicLedgerState(history=[])

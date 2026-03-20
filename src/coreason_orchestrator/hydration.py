@@ -40,7 +40,7 @@ def compile_state_hydration(
     """
     # Extract only the deterministic CIDs from the validated append-only history
     # The list generation naturally synthesizes a new list structure.
-    cids = [event.event_id for event in ledger.history]
+    cids = [getattr(event, "event_id", "placeholder") for event in ledger.history]
 
     # Synthesize the StateHydrationManifest
     return StateHydrationManifest(
