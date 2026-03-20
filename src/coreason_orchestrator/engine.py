@@ -272,7 +272,10 @@ class CoreOrchestrator:
                             import time
                             import uuid
 
-                            from coreason_manifest.spec.ontology import System2RemediationIntent
+                            from coreason_manifest.spec.ontology import (
+                                ManifestViolationReceipt,
+                                System2RemediationIntent,
+                            )
 
                             # Ensure we have a valid target node ID
                             target_node_id = active_node_id
@@ -292,9 +295,14 @@ class CoreOrchestrator:
                                 System2RemediationIntent,
                                 fault_id=f"fault_{uuid.uuid4().hex[:8]}",
                                 target_node_id=target_node_id,
-                                failing_pointers=["/tool_name"],
-                                remediation_prompt=f"Tool '{intent.tool_name}' is not authorized in the "
-                                "current ActionSpaceManifest.",
+                                violation_receipts=[
+                                    ManifestViolationReceipt(
+                                        failing_pointer="/tool_name",
+                                        violation_type="unauthorized_tool",
+                                        diagnostic_message=f"Tool '{intent.tool_name}' is not authorized in the "
+                                        "current ActionSpaceManifest.",
+                                    )
+                                ],
                             )
 
                             async with self._ledger_lock:

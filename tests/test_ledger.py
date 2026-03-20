@@ -7,7 +7,6 @@
 # Commercial use beyond a 30-day trial requires a separate license.
 #
 # Source Code: https://github.com/CoReason-AI/coreason_orchestrator
-
 from typing import Any
 
 from coreason_manifest.spec.ontology import (
@@ -19,7 +18,7 @@ from coreason_manifest.spec.ontology import (
     SystemFaultEvent,
 )
 from hypothesis import given, settings
-from hypothesis.strategies import dictionaries, floats, lists, text
+from hypothesis.strategies import dictionaries, floats, from_regex, lists, text
 
 from coreason_orchestrator.ledger import append_event, apply_rollback
 from coreason_orchestrator.utils.crypto import calculate_event_hash
@@ -322,13 +321,13 @@ def test_apply_rollback_existing_elements() -> None:
 
 
 @given(  # type: ignore[misc]
-    request_id=text(min_size=1),
-    target_event_id=text(min_size=1),
-    invalidated_node_ids=lists(text()),
-    cascade_id=text(min_size=1),
-    root_falsified_event_id=text(min_size=1),
+    request_id=from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True),
+    target_event_id=from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True),
+    invalidated_node_ids=lists(from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True)),
+    cascade_id=from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True),
+    root_falsified_event_id=from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True),
     propagated_decay_factor=floats(min_value=0.0, max_value=1.0),
-    quarantined_event_ids=lists(text(), min_size=1),
+    quarantined_event_ids=lists(from_regex(r"^[a-zA-Z0-9_.:-]+$", fullmatch=True), min_size=1),
 )
 @settings(max_examples=10)  # type: ignore[misc]
 def test_apply_rollback_hypothesis(
@@ -349,11 +348,14 @@ def test_apply_rollback_hypothesis(
         invalidated_node_ids=invalidated_node_ids,
     )
 
+    q_ids = [q for q in quarantined_event_ids if q != root_falsified_event_id]
+    if not q_ids:
+        q_ids = ["dummy_q_id"]
     cascade = DefeasibleCascadeEvent(
         cascade_id=cascade_id,
         root_falsified_event_id=root_falsified_event_id,
         propagated_decay_factor=propagated_decay_factor,
-        quarantined_event_ids=quarantined_event_ids,
+        quarantined_event_ids=q_ids,
     )
 
     manifest = apply_rollback(ledger, rollback, cascade)

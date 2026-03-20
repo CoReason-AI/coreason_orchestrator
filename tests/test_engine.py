@@ -158,7 +158,8 @@ async def test_delegate_to_kinetic_plane_success() -> None:
         timestamp=1.0,
         type="tool_invocation",
         tool_name="test_tool",
-        parameters={"param": "value"},
+        parameters={"test_param": "test_value"},
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig1",
@@ -170,7 +171,6 @@ async def test_delegate_to_kinetic_plane_success() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
 
@@ -258,7 +258,8 @@ async def test_delegate_to_kinetic_plane_primitive_payload() -> None:
         timestamp=1.0,
         type="tool_invocation",
         tool_name="test_tool",
-        parameters={},
+        parameters={"dummy": "dummy"},
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig1",
@@ -270,7 +271,6 @@ async def test_delegate_to_kinetic_plane_primitive_payload() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
 
@@ -445,8 +445,8 @@ async def test_tick_kinetic_delegation() -> None:
         timestamp=1.0,
         type="tool_invocation",
         tool_name="test_tool",
-        parameters={},
-        authorized_budget_magnitude=0,
+        parameters={"dummy": "dummy"},
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -458,7 +458,6 @@ async def test_tick_kinetic_delegation() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
     ledger = EpistemicLedgerState(history=[intent])
@@ -667,8 +666,8 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
         timestamp=1.0,
         type="tool_invocation",
         tool_name="missing_tool",
-        parameters={},
-        authorized_budget_magnitude=0,
+        parameters={"dummy": "dummy"},
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -680,7 +679,6 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
     ledger = EpistemicLedgerState(history=[intent])
@@ -709,8 +707,8 @@ async def test_tick_kinetic_delegation_tool_not_found() -> None:
     last_event = orchestrator.ledger.history[-1]
     assert isinstance(last_event, System2RemediationIntent)
     assert last_event.target_node_id == "did:coreason:node:a"
-    assert last_event.failing_pointers == ["/tool_name"]
-    assert "missing_tool" in last_event.remediation_prompt
+    assert last_event.violation_receipts[0].failing_pointer == "/tool_name"
+    assert "missing_tool" in last_event.violation_receipts[0].diagnostic_message
 
 
 @pytest.mark.asyncio
@@ -728,8 +726,8 @@ async def test_tick_kinetic_delegation_general_exception() -> None:
         timestamp=1.0,
         type="tool_invocation",
         tool_name="existing_tool",
-        parameters={},
-        authorized_budget_magnitude=0,
+        parameters={"dummy": "dummy"},
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -741,7 +739,6 @@ async def test_tick_kinetic_delegation_general_exception() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
     ledger = EpistemicLedgerState(history=[intent])
@@ -998,7 +995,7 @@ async def test_tick_intervention_policy_halt() -> None:
         type="tool_invocation",
         tool_name="existing_tool",
         parameters={"test_param": "test_value"},
-        authorized_budget_magnitude=0,
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -1010,7 +1007,6 @@ async def test_tick_intervention_policy_halt() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
     ledger = EpistemicLedgerState(history=[intent])
@@ -1103,7 +1099,7 @@ async def test_tick_intervention_policy_resume_with_receipt() -> None:
         type="tool_invocation",
         tool_name="existing_tool",
         parameters={"test_param": "test_value"},
-        authorized_budget_magnitude=0,
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -1115,7 +1111,6 @@ async def test_tick_intervention_policy_resume_with_receipt() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
 
@@ -1137,7 +1132,7 @@ async def test_tick_intervention_policy_resume_with_receipt() -> None:
 
     intervention_receipt = EventFactory.build_event(
         InterventionReceipt,
-        intervention_request_id=uuid.UUID(uuid_str),
+        intervention_request_id=uuid_str,
         target_node_id="did:coreason:node:a",
         approved=True,
         feedback="Looks good",
@@ -1227,7 +1222,7 @@ async def test_tick_intervention_policy_wait_for_receipt() -> None:
         type="tool_invocation",
         tool_name="existing_tool",
         parameters={"test_param": "test_value"},
-        authorized_budget_magnitude=0,
+        authorized_budget_magnitude=1,
         agent_attestation=AgentAttestationReceipt(
             training_lineage_hash="a" * 64,
             developer_signature="sig",
@@ -1239,7 +1234,6 @@ async def test_tick_intervention_policy_wait_for_receipt() -> None:
             public_inputs_hash="c" * 64,
             verifier_key_id="key1",
             cryptographic_blob="blob1",
-            latent_state_commitments={},
         ),
     )
 
