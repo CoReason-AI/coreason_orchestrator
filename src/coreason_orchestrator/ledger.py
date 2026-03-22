@@ -20,10 +20,38 @@ from coreason_manifest.spec.ontology import (
     StateDifferentialManifest,
     StateMutationIntent,
     TamperFaultEvent,
+    EvictionPolicy,
 )
 from coreason_manifest.utils.algebra import verify_merkle_proof
 
 from coreason_orchestrator.factory import EventFactory
+
+def apply_eviction_policy(ledger: EpistemicLedgerState, policy: EvictionPolicy) -> EpistemicLedgerState:
+    """
+    Phase 6: Memory Distillation (Information Bottleneck Theory).
+    Physically slices the EpistemicLedgerState history array before passing it
+    to the cognitive plane, enforcing context boundaries and preserving protected CIDs.
+    """
+    protected_cids = set(policy.protected_event_ids)
+    
+    retained_events = []
+    # Naive topological limit constraint (assuming ~500 tokens per full object)
+    max_retained_events = max(1, policy.max_retained_tokens // 500)
+    
+    if policy.strategy == "fifo" or policy.strategy == "salience_decay":
+        # Retain events backwards until budget is hit, unconditionally preserving protected
+        for idx in range(len(ledger.history) - 1, -1, -1):
+            event = ledger.history[idx]
+            event_id = getattr(event, "event_id", "")
+            if event_id in protected_cids:
+                retained_events.insert(0, event)
+            elif len(retained_events) < max_retained_events:
+                retained_events.insert(0, event)
+                
+        # Synthesize a new isolated view of the ledger
+        return ledger.model_copy(update={"history": tuple(retained_events)})
+        
+    return ledger
 
 
 def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerState:
@@ -62,7 +90,7 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
     # 3. Synthesize the mathematically bound event using EventFactory to ensure
     # the RFC 8785 hash is deterministically bound prior to final instantiation.
     # We dump the passed in event's parameters to rebuild it strictly through the factory
-    event_kwargs = event.model_dump(exclude={"event_id"})
+    event_kwargs = event.model_dump(exclude={"event_id"}, by_alias=True)
     crystallized_event = EventFactory.build_event(type(event), **event_kwargs)
 
     # 4. Check for automated Truth Maintenance if Epistemic Contraction is required.
@@ -151,7 +179,30 @@ def append_event(ledger: EpistemicLedgerState, event: Any) -> EpistemicLedgerSta
     else:
         new_history = (*ledger.history, crystallized_event)
 
-    return ledger.model_copy(update={"history": new_history})
+    # Phase 5: Map live resulting SemanticNodeState assumptions into defeasible_claims
+    # so they can be geometrically severed by Truth Maintenance cascades later.
+    new_defeasible_claims = dict(ledger.defeasible_claims)
+    
+    if hasattr(crystallized_event, "payload"):
+        payload = getattr(crystallized_event, "payload", {})
+        if isinstance(payload, dict):
+            # Duck-type scan for rigid SemanticNodeState instantiation
+            if "node_id" in payload and "label" in payload and "text_chunk" in payload:
+                from coreason_manifest.spec.ontology import SemanticNodeState
+                try:
+                    # Physically enforce the schema mapping
+                    claim = SemanticNodeState(**payload)
+                    new_defeasible_claims[claim.node_id] = claim
+                except Exception:
+                    # Ignores permutations missing cryptographic provenance or strict bounds
+                    pass
+
+    return ledger.model_copy(
+        update={
+            "history": new_history,
+            "defeasible_claims": new_defeasible_claims
+        }
+    )
 
 
 def apply_rollback(

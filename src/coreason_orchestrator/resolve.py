@@ -23,7 +23,7 @@ from coreason_manifest.spec.ontology import (
 )
 
 
-def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerState) -> list[AgentNodeProfile]:
+def resolve_current_node(workflow: WorkflowManifest | None, ledger: EpistemicLedgerState) -> list[AgentNodeProfile]:
     """
     Evaluates the AnyTopologyManifest discriminator within the root WorkflowManifest
     to deterministically resolve the active execution frontier based on the
@@ -37,6 +37,15 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
         A list of strictly typed AgentNodeProfile objects representing the active cursor.
         Returns an empty list if terminal.
     """
+    if workflow is None:
+        return [
+            AgentNodeProfile.model_construct(
+                description="Interactive Epistemic REPL",
+                type="agent",
+                node_id="interactive_agent"
+            )
+        ]
+
     topology = workflow.topology
 
     # Advanced Topologies Handling
@@ -173,5 +182,41 @@ def resolve_current_node(workflow: WorkflowManifest, ledger: EpistemicLedgerStat
             predecessor_node = nodes[node_id]
             if isinstance(predecessor_node, AgentNodeProfile):
                 active_frontier.append(predecessor_node)
+
+    # Phase 4: Speculative Execution Parallel Spawning
+    # Dynamically read active SpeculativeExecutionBoundary objects and force their
+    # `competing_hypotheses` into the active frontier ahead of sequential DAG traversal.
+    for event in ledger.history:
+        if type(event).__name__ == "SpeculativeExecutionBoundary":
+            if not getattr(event, "falsified", False):
+                hypotheses = getattr(event, "competing_hypotheses", [])
+                for hyp_id in hypotheses:
+                    if hyp_id in nodes and hyp_id not in completed_nodes:
+                        hyp_node = nodes[hyp_id]
+                        if isinstance(hyp_node, AgentNodeProfile) and hyp_node not in active_frontier:
+                            active_frontier.append(hyp_node)
+
+    # Systematic Search (Phase 4): Ingest RoutingFrontierPolicy
+    active_routing_policy = None
+    for event in ledger.history:
+        if type(event).__name__ == "RoutingFrontierPolicy":
+            active_routing_policy = event
+
+    if active_routing_policy:
+        pruned_frontier = []
+        for node in active_frontier:
+            # Approximated thermodynamic/latency bounds based on explicit node capabilities
+            node_latency = getattr(node, "estimated_latency_ms", 0)
+            node_cost = getattr(node, "estimated_cost_magnitude", 0)
+            node_capability = getattr(node, "required_capability_score", 0.0)
+
+            if node_latency > getattr(active_routing_policy, "max_latency_ms", float("inf")):
+                continue
+            if node_cost > getattr(active_routing_policy, "max_cost_magnitude_per_token", float("inf")):
+                continue
+            if node_capability > 0 and node_capability < getattr(active_routing_policy, "min_capability_score", 0.0):
+                continue
+            pruned_frontier.append(node)
+        active_frontier = pruned_frontier
 
     return active_frontier
